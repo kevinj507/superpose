@@ -343,6 +343,15 @@ export class Engine {
     return this.store.eventsSince(since);
   }
 
+  // Nodes with lease tokens removed, safe to show to anyone.
+  nodesForDisplay(): GraphNode[] {
+    return this.store.allNodes().map((n) => {
+      if (n.kind !== 'claim' || !n.lease) return n;
+      const { token: _secret, ...lease } = n.lease;
+      return { ...n, lease: { ...lease, token: '' } };
+    });
+  }
+
   // ---- internals ---------------------------------------------------------------
 
   // Every claim that rests on the given assumptions, directly or through a

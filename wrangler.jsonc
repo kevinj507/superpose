@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "superpose",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [{ "name": "GRAPH", "class_name": "Graph" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Graph"] }],
+  "observability": { "enabled": true }
+  // Secrets, set with `wrangler secret put`: ADMIN_TOKEN, AGENT_KEY.
+  // Optional vars: LEASE_MS, HEDGE_MS.
+}
