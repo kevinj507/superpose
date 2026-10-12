@@ -46,7 +46,7 @@ Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<gr
 - **What changed is read by the platform, never taken from the agent.** Scope verdicts come from the commit's trees. A commit too large to list completely cannot land.
 - **Project code never runs next to a write token.** A check fetches with a read token in one process, then runs the project's code in another process with no token. A landing merges in a container that runs no project code, tests the merge in a second container with a read token only, and moves the line from a third.
 - **The served reality is sandboxed.** Agent-written pages are served with a CSP sandbox, so they run in an origin of their own.
-- **Two adversarial code reviews ran,** four reviewers, then two. Every finding is fixed and has a test.
+- **Three adversarial code reviews ran** (four reviewers, then two, then two). Every finding is fixed and has a test.
 
 ## Cloudflare architecture
 
