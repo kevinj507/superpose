@@ -1,37 +1,62 @@
-import { EXIT_FETCH_FAILED, EXIT_MERGE_CONFLICT, EXIT_PUSH_REJECTED, tail, type CheckConfig, type ExecJob, type ExecOutcome } from './checks';
+import {
+  EXIT_FETCH_FAILED,
+  EXIT_MERGE_CONFLICT,
+  EXIT_PUSH_REJECTED,
+  runCheck,
+  tail,
+  type CheckConfig,
+  type ExecJob,
+  type ExecOutcome,
+} from './checks';
 import type { LandingOutcome } from './engine';
 import type { RepoHost } from './repos';
-import type { RepoRef } from './types';
+import type { CheckRun, RepoRef } from './types';
 
-// Runs in a fresh container: a real `git merge` of the claim's exact commit
-// into its line, the checks on the merged result, and a push to the line only
-// if they pass (a claim lands only with a passing verdict on what it becomes
-// part of). Tokens arrive in the environment, never in the script.
-export const LAND_SCRIPT = `
+// Landing runs in three containers, so code from the repo never runs where a
+// token that can write the line exists:
+//   1. merge (trusted: no repo code runs): fetch the line and the claim's exact
+//      commit, `git merge --no-ff`, and push the merge commit to a staging
+//      branch of the line repo;
+//   2. check (untrusted, read token only): the claim's checks on the merge;
+//   3. promote (trusted, fresh): move the line's main to that merge commit,
+//      fast-forward only, and drop the staging branch.
+// Git never runs hooks here (none are fetched, and hooks are off), and the
+// tokens arrive in the environment, never in the script.
+
+export function stagingRef(claimId: string): string {
+  return `refs/heads/superpose/landing-${claimId}`;
+}
+
+export const MERGE_SCRIPT = `
 set -u
 rm -rf /work && mkdir -p /work && cd /work
 git init -q -b main
 git config user.name "Superpose"
 git config user.email "land@superpose.invalid"
+git config core.hooksPath /dev/null
 git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" fetch -q "$LINE_REMOTE" main || exit ${EXIT_FETCH_FAILED}
 git checkout -q -B main FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
+echo "BASE $(git rev-parse HEAD)"
 git -c http.extraHeader="Authorization: Bearer $CLAIM_TOKEN" fetch -q "$CLAIM_REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
 if ! git merge -q --no-ff -m "$MESSAGE" FETCH_HEAD; then
   echo "CONFLICT"
   git diff --name-only --diff-filter=U
   exit ${EXIT_MERGE_CONFLICT}
 fi
-if [ -n "\${CHECK:-}" ]; then
-  if [ -n "\${SETUP:-}" ]; then
-    echo "\\$ $SETUP"
-    timeout -k 5 "$TIMEOUT" sh -c "$SETUP" 2>&1 || exit $?
-  fi
-  echo "\\$ $CHECK"
-  timeout -k 5 "$TIMEOUT" sh -c "$CHECK" 2>&1 || exit $?
-  git clean -fdxq
-fi
-git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" push -q "$LINE_REMOTE" HEAD:main || exit ${EXIT_PUSH_REJECTED}
+git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" push -q --no-verify -f "$LINE_REMOTE" "HEAD:$STAGING" || exit ${EXIT_PUSH_REJECTED}
 echo "MERGED $(git rev-parse HEAD)"
+`;
+
+export const PROMOTE_SCRIPT = `
+set -u
+rm -rf /work && mkdir -p /work && cd /work
+git init -q -b main
+git config core.hooksPath /dev/null
+git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" fetch -q "$LINE_REMOTE" "$STAGING" || exit ${EXIT_FETCH_FAILED}
+[ "$(git rev-parse FETCH_HEAD)" = "$MERGE" ] || { echo "the staging branch moved"; exit ${EXIT_PUSH_REJECTED}; }
+git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" push -q --no-verify "$LINE_REMOTE" "$MERGE:refs/heads/main" || exit ${EXIT_PUSH_REJECTED}
+git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" push -q --no-verify "$LINE_REMOTE" ":$STAGING" || true
+echo "LANDED $MERGE"
 `;
 
 export interface LandingJob {
@@ -40,42 +65,69 @@ export interface LandingJob {
   claimId: string;
   sha: string;
   statement: string;
-  config: CheckConfig | null;
 }
 
-export async function runLanding(
-  host: RepoHost,
-  exec: (job: ExecJob) => Promise<ExecOutcome>,
-  job: LandingJob,
-): Promise<LandingOutcome> {
-  const timeoutSeconds = job.config?.timeoutSeconds ?? 300;
-  const ttl = Math.max(60, timeoutSeconds * 2 + 300);
-  const lineToken = await host.mintToken(job.line.name, 'write', ttl);
-  const claimToken = await host.mintToken(job.claim.name, 'read', ttl).catch(async (err) => {
-    await host.revokeToken(job.line.name, lineToken.id).catch(() => {});
-    throw err;
-  });
+export type MergeResult =
+  | { status: 'merged'; merge: string; base: string | null; log: string }
+  | Exclude<LandingOutcome, { status: 'landed' }>;
+
+type Exec = (job: ExecJob) => Promise<ExecOutcome>;
+
+const TOKEN_TTL = 900;
+
+export async function mergeForLanding(host: RepoHost, exec: Exec, job: LandingJob): Promise<MergeResult> {
+  const lineToken = await host.mintToken(job.line.name, 'write', TOKEN_TTL);
   try {
-    const outcome = await exec({
-      script: LAND_SCRIPT,
-      env: {
-        LINE_TOKEN: lineToken.secret,
-        LINE_REMOTE: job.line.remote,
-        CLAIM_TOKEN: claimToken.secret,
-        CLAIM_REMOTE: job.claim.remote,
-        SHA: job.sha,
-        MESSAGE: landingMessage(job.claimId, job.statement),
-        SETUP: job.config?.setup ?? '',
-        CHECK: job.config?.check ?? '',
-        TIMEOUT: String(timeoutSeconds),
-      },
-      timeoutSeconds,
-    });
-    return landingOutcome(outcome);
+    const claimToken = await host.mintToken(job.claim.name, 'read', TOKEN_TTL);
+    try {
+      const outcome = await exec({
+        script: MERGE_SCRIPT,
+        env: {
+          LINE_TOKEN: lineToken.secret,
+          LINE_REMOTE: job.line.remote,
+          CLAIM_TOKEN: claimToken.secret,
+          CLAIM_REMOTE: job.claim.remote,
+          SHA: job.sha,
+          MESSAGE: landingMessage(job.claimId, job.statement),
+          STAGING: stagingRef(job.claimId),
+        },
+        timeoutSeconds: 120,
+      });
+      return mergeResult(outcome);
+    } finally {
+      await host.revokeToken(job.claim.name, claimToken.id).catch(() => {});
+    }
   } finally {
     await host.revokeToken(job.line.name, lineToken.id).catch(() => {});
-    await host.revokeToken(job.claim.name, claimToken.id).catch(() => {});
   }
+}
+
+// The claim's checks, on the merged result, holding only a read token.
+export function checkMerged(host: RepoHost, exec: Exec, line: RepoRef, merge: string, config: CheckConfig): Promise<CheckRun> {
+  return runCheck(host, exec, line, merge, config);
+}
+
+export async function promoteLanding(host: RepoHost, exec: Exec, line: RepoRef, claimId: string, merge: string): Promise<LandingOutcome> {
+  const lineToken = await host.mintToken(line.name, 'write', TOKEN_TTL);
+  try {
+    const outcome = await exec({
+      script: PROMOTE_SCRIPT,
+      env: { LINE_TOKEN: lineToken.secret, LINE_REMOTE: line.remote, STAGING: stagingRef(claimId), MERGE: merge },
+      timeoutSeconds: 120,
+    });
+    const log = logOf(outcome);
+    if (!outcome.error && outcome.exitCode === 0 && outcome.stdout.includes(`LANDED ${merge}`)) return { status: 'landed', merge, log };
+    return { status: 'error', log: `could not move the line to the merge: ${log}` };
+  } finally {
+    await host.revokeToken(line.name, lineToken.id).catch(() => {});
+  }
+}
+
+// What the checks on the merged result mean for the landing.
+export function landingFromCheck(run: CheckRun): Exclude<LandingOutcome, { status: 'landed' }> | null {
+  if (run.status === 'passed' || run.status === 'skipped') return null;
+  if (run.status === 'error') return { status: 'error', log: run.log };
+  return { status: 'failed', log: run.log };
 }
 
 // The merge commit names its claim, so blame on the line leads back to the
@@ -85,18 +137,22 @@ export function landingMessage(claimId: string, statement: string): string {
   return `Land ${claimId}: ${title}\n\nSuperpose-Claim: ${claimId}`;
 }
 
-export function landingOutcome(outcome: ExecOutcome): LandingOutcome {
-  const log = tail(`${outcome.stdout}${outcome.stderr ? `\n${outcome.stderr}` : ''}${outcome.error ? `\n${outcome.error}` : ''}`);
+export function mergeResult(outcome: ExecOutcome): MergeResult {
+  const log = logOf(outcome);
   if (outcome.error || outcome.exitCode === null) return { status: 'error', log };
   if (outcome.exitCode === 0) {
     const merge = /MERGED ([0-9a-f]{40})/.exec(outcome.stdout)?.[1];
-    return merge ? { status: 'landed', merge, log } : { status: 'error', log: `no merge commit reported\n${log}` };
+    const base = /BASE ([0-9a-f]{40})/.exec(outcome.stdout)?.[1] ?? null;
+    return merge ? { status: 'merged', merge, base, log } : { status: 'error', log: `no merge commit reported\n${log}` };
   }
   if (outcome.exitCode === EXIT_MERGE_CONFLICT) {
     const after = outcome.stdout.split('CONFLICT')[1] ?? '';
     const files = after.split('\n').map((l) => l.trim()).filter(Boolean);
     return { status: 'conflict', files, log };
   }
-  if (outcome.exitCode === EXIT_FETCH_FAILED || outcome.exitCode === EXIT_PUSH_REJECTED) return { status: 'error', log };
-  return { status: 'failed', log };
+  return { status: 'error', log };
+}
+
+function logOf(outcome: ExecOutcome): string {
+  return tail(`${outcome.stdout}${outcome.stderr ? `\n${outcome.stderr}` : ''}${outcome.error ? `\n${outcome.error}` : ''}`);
 }

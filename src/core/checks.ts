@@ -47,8 +47,11 @@ export const CHECK_SCRIPT = `
 set -u
 rm -rf /work && mkdir -p /work && cd /work
 git init -q
+git config core.hooksPath /dev/null
 git -c http.extraHeader="Authorization: Bearer $GIT_TOKEN" fetch -q --depth 1 "$REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
 git checkout -q FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
+# From here on, code from the repo runs: it gets no token.
+unset GIT_TOKEN
 if [ -n "\${SETUP:-}" ]; then
   echo "\\$ $SETUP"
   timeout -k 5 "$TIMEOUT" sh -c "$SETUP" 2>&1 || exit $?

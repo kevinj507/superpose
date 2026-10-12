@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EXIT_FETCH_FAILED, EXIT_MERGE_CONFLICT } from '../src/core/checks';
 import { Engine } from '../src/core/engine';
-import { landingMessage, landingOutcome } from '../src/core/landing';
+import { landingFromCheck, landingMessage, mergeResult, MERGE_SCRIPT, PROMOTE_SCRIPT } from '../src/core/landing';
 import { MemoryStore } from '../src/core/store';
 
 function setup() {
@@ -62,12 +62,25 @@ describe('the landing queue', () => {
 describe('reading a landing\'s outcome', () => {
   it('finds the merge commit, the conflicting files, and the platform failing', () => {
     const merge = 'a'.repeat(40);
-    expect(landingOutcome({ exitCode: 0, stdout: `ok\nMERGED ${merge}\n`, stderr: '', ms: 1 })).toMatchObject({ status: 'landed', merge });
-    expect(landingOutcome({ exitCode: EXIT_MERGE_CONFLICT, stdout: 'CONFLICT\nsrc/a.ts\nsrc/b.ts\n', stderr: '', ms: 1 }))
+    const base = 'b'.repeat(40);
+    expect(mergeResult({ exitCode: 0, stdout: `BASE ${base}\nMERGED ${merge}\n`, stderr: '', ms: 1 })).toMatchObject({ status: 'merged', merge, base });
+    expect(mergeResult({ exitCode: EXIT_MERGE_CONFLICT, stdout: `BASE ${base}\nCONFLICT\nsrc/a.ts\nsrc/b.ts\n`, stderr: '', ms: 1 }))
       .toMatchObject({ status: 'conflict', files: ['src/a.ts', 'src/b.ts'] });
-    expect(landingOutcome({ exitCode: 1, stdout: 'not ok 1', stderr: '', ms: 1 }).status).toBe('failed');
-    expect(landingOutcome({ exitCode: EXIT_FETCH_FAILED, stdout: '', stderr: '', ms: 1 }).status).toBe('error');
-    expect(landingOutcome({ exitCode: null, stdout: '', stderr: '', ms: 1, error: 'boom' }).status).toBe('error');
+    expect(mergeResult({ exitCode: EXIT_FETCH_FAILED, stdout: '', stderr: '', ms: 1 }).status).toBe('error');
+    expect(mergeResult({ exitCode: null, stdout: '', stderr: '', ms: 1, error: 'boom' }).status).toBe('error');
+    expect(landingFromCheck({ status: 'failed', exitCode: 1, startedAt: 0, log: 'not ok 1' })).toMatchObject({ status: 'failed' });
+    expect(landingFromCheck({ status: 'timeout', exitCode: 124, startedAt: 0 })).toMatchObject({ status: 'failed' });
+    expect(landingFromCheck({ status: 'passed', exitCode: 0, startedAt: 0 })).toBeNull();
+  });
+
+  it('never runs repo code where a token that can write the line exists', () => {
+    // The merge and the promotion run no repo code (no setup, no checks, no
+    // hooks); the checks run elsewhere with a read token, dropped first.
+    for (const script of [MERGE_SCRIPT, PROMOTE_SCRIPT]) {
+      expect(script).not.toMatch(/\$SETUP|\$CHECK|npm|node /);
+      expect(script).toContain('core.hooksPath /dev/null');
+    }
+    expect(PROMOTE_SCRIPT).toContain('"$MERGE:refs/heads/main"');
   });
 
   it('the merge commit names its claim', () => {

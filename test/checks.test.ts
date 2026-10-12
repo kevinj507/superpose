@@ -55,3 +55,12 @@ describe('running checks on one commit', () => {
     expect(at(null, { error: 'container not ready' })).toBe('error');
   });
 });
+
+describe('the check script', () => {
+  it('drops the token before any code from the repo runs, and runs no git hooks', () => {
+    const unset = CHECK_SCRIPT.indexOf('unset GIT_TOKEN');
+    expect(unset).toBeGreaterThan(CHECK_SCRIPT.indexOf('git checkout'));
+    expect(unset).toBeLessThan(CHECK_SCRIPT.indexOf('$SETUP'));
+    expect(CHECK_SCRIPT).toContain('core.hooksPath /dev/null');
+  });
+});
