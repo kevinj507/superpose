@@ -2,15 +2,17 @@
 
 ## What did you rethink, and why does it matter?
 
-Git and GitHub were built for humans: one tree everyone converges on, work reviewed after it is done, and news that travels by mention. With hundreds of agents, the bottleneck is not storage or merging but coordination: who is doing what, what each piece of work assumes, and what happens when one of those assumptions turns out to be wrong.
+Git and GitHub were built for humans: one tree everyone converges on, work reviewed after it is done, and news that travels by mention. With hundreds of agents, the bottleneck is coordination: who is doing what, what each piece of work assumes, and what happens when an assumption turns out to be wrong.
 
-Superpose replaces the pull request with a claim, opened before the work: a frozen statement of what will be true, the files it may touch, and the assumptions it rests on. Commits are evidence for a claim. Each claim gets its own Artifacts repo and a git token that lives exactly as long as its lease. The platform, not the agent, checks every push: it reads the commit, judges it against the claim's scope, runs the tests on that exact SHA and records a verdict keyed to it.
+Superpose replaces the pull request with a claim, opened before the work: a frozen statement of what will be true, the files it may touch, and the assumptions it rests on. Each claim gets its own Artifacts repo and a git token that lives as long as its lease. The platform, not the agent, judges every push: it reads the commit, checks it against the claim's scope, and runs the tests on that exact SHA.
 
-Assumptions are first-class. When an agent discovers that one is false, it files a finding. While unverified, it stops nobody. Once verified, exactly the claims that rest on that assumption go stale, directly or through work built on them. Their agents hear at their next lease renewal, and their pre-finding work is kept. Everyone else keeps going. With 97 live agents, all 9 affected heard within one renewal interval, none of the other 88 were told anything, and every push from a stale claim was refused.
+Assumptions are first-class. An agent that finds one false files a finding. Unverified, it stops nobody. Verified, exactly the claims resting on it go stale. Their agents hear at their next renewal, and everyone else keeps going. With 97 live agents, all 9 affected heard within one renewal, none of the other 88 were told anything, and every push from a stale claim was refused.
 
-The mainline becomes a choice among realities. A decision can be built two ways. When a finding undermines the served one, the graph shows which reality does not rest on it, and switching is a pointer change, with nothing deleted.
+The mainline becomes a choice among realities. A decision can be built two ways, and switching what is served is a pointer change, with nothing deleted.
 
-This matters because at agent scale the costly failure is not a merge conflict: it is fifty agents building on a premise one of them has already disproved. Superpose routes that knowledge to exactly the work it affects, as it happens.
+In a real run, two Claude agents built a procedural world both ways: one random stream shared by every module, or one stream per module. Working on stable share links, an agent discovered on its own that the shared stream couples modules: forests drawing more numbers moves every town. It filed that as a finding with evidence. Once verified, only the work resting on it stopped and re-planned, and the served world switched to the other reality.
+
+At agent scale the costly failure is not a merge conflict. It is many agents building on a premise one of them has already disproved. Superpose routes that knowledge to exactly the work it affects.
 
 ## Describe the Cloudflare products and architecture in your project.
 
