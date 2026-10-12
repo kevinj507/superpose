@@ -57,6 +57,14 @@ export class Coordinator {
     return repo;
   }
 
+  // Fork a line into a new one: another option of a decision, built side by side.
+  async createLine(input: { name: string; from: string; decision?: string; option?: string }) {
+    const source = await this.ensureLine(input.from);
+    if (!source.head) throw new EngineError('empty_line', `line ${input.from} has no commits to fork`);
+    const fork = await this.host.fork(source.name, lineRepoName(this.opts.graph, input.name));
+    return this.tx((e) => e.addLine({ ...input, repo: { name: fork.name, remote: fork.remote }, head: fork.head }));
+  }
+
   async lineAccess(line: string, scope: 'read' | 'write', ttlSeconds: number): Promise<GitAccess & { repo: string }> {
     const repo = await this.ensureLine(line);
     const t = await this.host.mintToken(repo.name, scope, ttlSeconds);

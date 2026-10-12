@@ -13,6 +13,7 @@ import type {
   Line,
   Notice,
   PushRecord,
+  RealityImpact,
   RepoRef,
   Verdict,
 } from './types';
@@ -78,6 +79,7 @@ export interface Impact {
   affected: string[]; // claims that go stale
   landedAtRisk: string[]; // landed claims, part of the served reality
   cost: number; // pushes already made on the affected claims
+  realities: RealityImpact[]; // every line, and whether this finding reaches it
 }
 
 export class Engine {
@@ -322,6 +324,38 @@ export class Engine {
 
   // ---- lines and landing ---------------------------------------------------
 
+  // A new line forked from another: the second option of a decision, say.
+  // It carries the work landed on its source so far.
+  addLine(input: { name: string; from: string; repo: RepoRef; head?: string; decision?: string; option?: string }): Line {
+    if (this.store.getLine(input.name)) throw new EngineError('exists', `line ${input.name} exists`);
+    const source = this.line(input.from);
+    const carried = this.claims().filter((c) => c.line === input.from && c.status === 'landed').map((c) => c.id);
+    const line: Line = {
+      name: input.name,
+      repo: input.repo,
+      head: input.head,
+      served: false,
+      from: input.from,
+      inherits: [...(source.inherits ?? []), ...carried],
+    };
+    if (input.decision) line.decision = input.decision;
+    if (input.option) line.option = input.option;
+    if (!this.store.getLine(input.from)) this.store.putLine(source);
+    this.store.putLine(line);
+    return line;
+  }
+
+  // Switch what is served: a pointer change. Nothing is deleted; the previous
+  // reality stays as it was, retraceable.
+  serve(name: string): Line {
+    const target = this.store.getLine(name);
+    if (!target) throw new EngineError('not_found', `no line ${name}`);
+    const previous = this.store.lines().find((l) => l.served);
+    for (const l of this.store.lines()) if (l.served !== (l.name === name)) this.store.putLine({ ...l, served: l.name === name });
+    this.emit('reality.served', [], { line: name, previous: previous?.name ?? null });
+    return { ...target, served: true };
+  }
+
   line(name: string): Line {
     return this.store.getLine(name) ?? { name, served: !this.store.lines().some((l) => l.served) };
   }
@@ -471,7 +505,7 @@ export class Engine {
   // What verifying a finding would cost, reported before it fires.
   impactOf(findingId: string): Impact {
     const f = this.finding(findingId);
-    if (f.effect === 'helps') return { affected: [], landedAtRisk: [], cost: 0 };
+    if (f.effect === 'helps') return { affected: [], landedAtRisk: [], cost: 0, realities: this.realitiesAgainst([], []) };
     const affected: string[] = [];
     const landedAtRisk: string[] = [];
     let cost = 0;
@@ -483,7 +517,7 @@ export class Engine {
         cost += c.pushes;
       }
     }
-    return { affected, landedAtRisk, cost };
+    return { affected, landedAtRisk, cost, realities: this.realitiesAgainst(affected, landedAtRisk) };
   }
 
   verifyFinding(findingId: string): Impact {
@@ -579,6 +613,17 @@ export class Engine {
   }
 
   // ---- internals ---------------------------------------------------------------
+
+  private realitiesAgainst(affected: string[], landedAtRisk: string[]): RealityImpact[] {
+    const lines = new Map(this.store.lines().map((l) => [l.name, l]));
+    for (const c of this.claims()) if (!lines.has(c.line)) lines.set(c.line, this.line(c.line));
+    const lineOf = new Map(this.claims().map((c) => [c.id, c.line]));
+    return [...lines.values()].map((l) => {
+      const mine = affected.filter((id) => lineOf.get(id) === l.name);
+      const landed = landedAtRisk.filter((id) => lineOf.get(id) === l.name || (l.inherits ?? []).includes(id));
+      return { line: l.name, served: l.served, affected: mine, landedAtRisk: landed, safe: !mine.length && !landed.length };
+    });
+  }
 
   private markLanded(id: string, merge: string | undefined, lineName: string) {
     const c = this.claimNode(id);

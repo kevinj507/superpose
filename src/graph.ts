@@ -91,6 +91,26 @@ export class Graph extends DurableObject<Env> {
     return this.runWithRepos(graph, (c) => c.release(id, token));
   }
 
+  createLine(graph: string, input: { name: string; from: string; decision?: string; option?: string }) {
+    return this.runWithRepos(graph, (c) => c.createLine(input));
+  }
+
+  serve(line: string) {
+    return this.run((e) => e.serve(line));
+  }
+
+  // The file at `path` in the served reality, for serving the app itself.
+  async servedFile(graph: string, path: string): Promise<{ text: string } | null> {
+    const line = this.engine.lines().find((l) => l.served) ?? this.engine.line('main');
+    const repo = line.repo?.name ?? lineRepoName(graph, line.name);
+    try {
+      const text = await this.repoHost.readFile(repo, line.head ?? 'main', path);
+      return text === null ? null : { text };
+    } catch {
+      return null;
+    }
+  }
+
   // Git access to a line, for the planner or a human to seed or read it.
   lineAccess(graph: string, line: string, scope: 'read' | 'write', ttlSeconds: number) {
     return this.runWithRepos(graph, (c) => c.lineAccess(line, scope, ttlSeconds));

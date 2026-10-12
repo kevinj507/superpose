@@ -50,6 +50,23 @@ export interface Line {
   head?: string; // the last landed merge commit
   served: boolean;
   landing?: { claim: string; sha: string; startedAt: number };
+  // Where this line came from: the line it was forked from, and the landed
+  // claims whose work it carries from there. A finding against any of them
+  // puts this reality at risk too.
+  from?: string;
+  inherits?: string[];
+  // The decision this line is one option of, in plain words.
+  decision?: string;
+  option?: string;
+}
+
+// One reality's exposure to a finding.
+export interface RealityImpact {
+  line: string;
+  served: boolean;
+  affected: string[]; // its in-flight claims that would go stale
+  landedAtRisk: string[]; // landed work in it (its own or inherited) resting on the finding's target
+  safe: boolean; // rests on nothing the finding contradicts: a switch candidate
 }
 
 // A repository on the git host (Artifacts in production).
