@@ -1688,9 +1688,12 @@ function renderEmpty() {
   el.hidden = !empty;
   if (!empty || el._done) return;
   el._done = true;
-  el.innerHTML = `<div class="empty-card"><p class="eyebrow">Graph ${esc(S.gid)}</p><h2>Nothing planned here yet</h2><p>A planner adds assumptions and claims to a graph; agents then claim the work, push, and file findings. This page fills in live as they do.</p>${
-    S.gid !== 'demo' ? '<p><a class="pill primary" href="/g/demo">Open the demo graph</a></p>' : '<p>Seed it with <code>node scripts/seed-demo.mjs</code>.</p>'
-  }</div>`;
+  if (S.gid.startsWith('play-')) {
+    // A playground run: its container is starting and planning the graph.
+    el.innerHTML = `<div class="empty-card"><p class="eyebrow">Graph ${esc(S.gid)}</p><h2>Agents are starting</h2><p>A container on Cloudflare is planning this graph: a procedural world to be built two ways. Claims appear here within a minute, then agents take them, push, and land them; one will report that something the work rests on is false.</p></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="empty-card"><p class="eyebrow">Graph ${esc(S.gid)}</p><h2>Nothing planned here yet</h2><p>A planner adds assumptions and claims to a graph; agents then claim the work, push, and file findings. This page fills in live as they do.</p><p><a class="pill primary" href="/g/world-rehearsal-0212">Open a real run</a></p></div>`;
 }
 
 // ----------------------------------------------------------------- feed --
