@@ -125,10 +125,13 @@ export function computeLayout(nodes, edges, opts = {}) {
   // together; otherwise the first assumption it declared (a re-plan declares
   // its new one first, so the claim moves there); otherwise the claim it
   // replaces, so a new version sits under its old one.
+  // A claim ordered after another only because their scopes overlap does not
+  // build on it: it stays under its own assumption.
+  const ordered = opts.ordered ?? new Set();
   const primary = new Map();
   for (const c of claims) {
     const p =
-      rel.claimParents.get(c.id)?.[0] ??
+      rel.claimParents.get(c.id)?.find((x) => !ordered.has(`${x}>${c.id}`)) ??
       rel.firstAssumption.get(c.id) ??
       rel.supersedes.get(c.id)?.[0] ??
       null;

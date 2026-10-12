@@ -208,6 +208,15 @@ export function describeEvent(ev, ctx = {}) {
         html: `${chips(claimsOf, nodes)} ${good ? 'checks passed' : esc(v?.label ?? 'checked')}${d.sha ? ` on <code>${esc(shortSha(d.sha))}</code>` : ''}`,
       };
     }
+    case 'claim.ordered': {
+      const c = typeof d.claim === 'string' ? d.claim : null;
+      const after = typeof d.after === 'string' ? d.after : null;
+      return {
+        tone: 'warn',
+        icon: 'branch',
+        html: `${c ? chip(c, nodes) : 'A claim'} waits for ${after ? chip(after, nodes) : 'another'}: their scopes overlap${overlapText(d)}<span class="sub">A conflict predicted before work starts: they will not change the same files at once.</span>`,
+      };
+    }
     case 'claim.landed': {
       const line = typeof d.line === 'string' ? d.line : 'its line';
       const merge = typeof d.merge === 'string' ? d.merge : null;
@@ -251,6 +260,30 @@ export function describeEvent(ev, ctx = {}) {
     default:
       return { tone: 'muted', icon: 'dot', html: `${esc(ev.type)} ${chips(claimsOf, nodes)}` };
   }
+}
+
+// Where two declared scopes meet, e.g. "src/shared/format.ts": the pattern
+// both name, or the more specific of the first pair that overlap.
+const globRe = (g) =>
+  new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '.*')}$`);
+const wild = (g) => /[*?]/.test(g);
+
+export function overlapText(d) {
+  const a = Array.isArray(d?.scope) ? d.scope.filter((x) => typeof x === 'string') : [];
+  const b = Array.isArray(d?.overlaps) ? d.overlaps.filter((x) => typeof x === 'string') : [];
+  for (const x of a) {
+    for (const y of b) {
+      let meets = x === y;
+      try {
+        meets ||= globRe(x).test(y) || globRe(y).test(x);
+      } catch {
+        // an odd pattern: compare as written
+      }
+      if (meets) return ` (<code>${esc(x === y || !wild(x) ? x : !wild(y) ? y : `${x} ↔ ${y}`)}</code>)`;
+    }
+  }
+  const shown = [a[0], b[0]].filter(Boolean).join(' ↔ ');
+  return shown ? ` (<code>${esc(shown)}</code>)` : '';
 }
 
 // One sentence for a ledger row (a push the platform checked).
