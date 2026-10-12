@@ -56,7 +56,7 @@
     "holder": "ada",
     "token": "",
     "expiresAt": 1791817392000,
-    "cursor": 6,
+    "cursor": 12,
     "git": {
      "tokenId": "tok-ada",
      "expiresAt": 1791817391500
@@ -158,7 +158,7 @@
     "holder": "dex",
     "token": "",
     "expiresAt": 1791817650000,
-    "cursor": 16,
+    "cursor": 30,
     "git": {
      "tokenId": "tok-dex",
      "expiresAt": 1791817649500
@@ -188,7 +188,7 @@
     "holder": "elio",
     "token": "",
     "expiresAt": 1791817356000,
-    "cursor": 16,
+    "cursor": 30,
     "git": {
      "tokenId": "tok-elio",
      "expiresAt": 1791817355500
@@ -219,7 +219,7 @@
     "holder": "fern",
     "token": "",
     "expiresAt": 1791817215000,
-    "cursor": 16,
+    "cursor": 30,
     "git": {
      "tokenId": "tok-fern",
      "expiresAt": 1791817214500
@@ -246,6 +246,11 @@
    "kept": [],
    "version": 1,
    "headSha": "a09406fb78bb62e88dbb2de910945396be300261",
+   "finishedAt": 1791817164000,
+   "landing": {
+    "status": "landing",
+    "at": 1791817182000
+   },
    "repo": {
     "name": "demo.claim.c7",
     "remote": "https://artifacts.example/superpose/demo.claim.c7.git"
@@ -265,6 +270,8 @@
    "pushes": 3,
    "kept": [],
    "version": 1,
+   "finishedAt": 1791815400000,
+   "landedSha": "bef0b03fe5f03a7c8c64481eaf45881edfee6585",
    "repo": {
     "name": "demo.claim.c8",
     "remote": "https://artifacts.example/superpose/demo.claim.c8.git"
@@ -288,7 +295,7 @@
     "holder": "gus",
     "token": "",
     "expiresAt": 1791817512000,
-    "cursor": 17,
+    "cursor": 30,
     "git": {
      "tokenId": "tok-gus",
      "expiresAt": 1791817511500
@@ -318,7 +325,7 @@
     "holder": "hana",
     "token": "",
     "expiresAt": 1791817728000,
-    "cursor": 17,
+    "cursor": 30,
     "git": {
      "tokenId": "tok-hana",
      "expiresAt": 1791817727500
@@ -392,6 +399,8 @@
    "pushes": 2,
    "kept": [],
    "version": 1,
+   "finishedAt": 1791814800000,
+   "landedSha": "ef3bbe7de0591a697608c8357c23ca62df4bcdbe",
    "repo": {
     "name": "demo.claim.c13",
     "remote": "https://artifacts.example/superpose/demo.claim.c13.git"
@@ -435,7 +444,7 @@
     "holder": "jude",
     "token": "",
     "expiresAt": 1791817764000,
-    "cursor": 17,
+    "cursor": 30,
     "git": {
      "tokenId": "tok-jude",
      "expiresAt": 1791817763500
@@ -461,9 +470,41 @@
    "pushes": 2,
    "kept": [],
    "version": 1,
+   "finishedAt": 1791815700000,
+   "landedSha": "2132a4dd58fda946585749bfc7f94a13656dcac3",
    "repo": {
     "name": "demo.claim.c16",
     "remote": "https://artifacts.example/superpose/demo.claim.c16.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c20",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Per-workspace API keys",
+   "scope": [
+    "src/api/keys.ts",
+    "src/api/routes.ts"
+   ],
+   "status": "done",
+   "pushes": 2,
+   "kept": [],
+   "version": 1,
+   "headSha": "71394159ffbdc5ad35e0ce3456fa20d5112f2c39",
+   "finishedAt": 1791816960000,
+   "landing": {
+    "status": "conflict",
+    "at": 1791816990000,
+    "files": [
+     "src/api/routes.ts"
+    ],
+    "log": "Auto-merging src/api/routes.ts\nCONFLICT (content): Merge conflict in src/api/routes.ts\nAutomatic merge failed; fix conflicts and then commit the result."
+   },
+   "repo": {
+    "name": "demo.claim.c20",
+    "remote": "https://artifacts.example/superpose/demo.claim.c20.git"
    },
    "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
   },
@@ -522,7 +563,7 @@
     "holder": "kai",
     "token": "",
     "expiresAt": 1791817434000,
-    "cursor": 17,
+    "cursor": 30,
     "git": {
      "tokenId": "tok-kai",
      "expiresAt": 1791817433500
@@ -685,6 +726,11 @@
    "purpose": "required for"
   },
   {
+   "source": "a2",
+   "target": "c20",
+   "purpose": "required for"
+  },
+  {
    "source": "a3",
    "target": "c19",
    "purpose": "required for"
@@ -713,6 +759,52 @@
  "events": [
   {
    "seq": 1,
+   "at": 1791814800000,
+   "type": "claim.landed",
+   "claims": [
+    "c13"
+   ],
+   "data": {
+    "line": "main",
+    "merge": "ef3bbe7de0591a697608c8357c23ca62df4bcdbe"
+   }
+  },
+  {
+   "seq": 2,
+   "at": 1791815400000,
+   "type": "claim.landed",
+   "claims": [
+    "c8"
+   ],
+   "data": {
+    "line": "main",
+    "merge": "bef0b03fe5f03a7c8c64481eaf45881edfee6585"
+   }
+  },
+  {
+   "seq": 3,
+   "at": 1791815700000,
+   "type": "claim.landed",
+   "claims": [
+    "c16"
+   ],
+   "data": {
+    "line": "main",
+    "merge": "2132a4dd58fda946585749bfc7f94a13656dcac3"
+   }
+  },
+  {
+   "seq": 4,
+   "at": 1791816480000,
+   "type": "reality.served",
+   "claims": [],
+   "data": {
+    "line": "main",
+    "previous": "tz-utc"
+   }
+  },
+  {
+   "seq": 5,
    "at": 1791816660000,
    "type": "finding.filed",
    "claims": [
@@ -723,7 +815,7 @@
    }
   },
   {
-   "seq": 2,
+   "seq": 6,
    "at": 1791816720000,
    "type": "finding.verified",
    "claims": [
@@ -734,7 +826,7 @@
    }
   },
   {
-   "seq": 3,
+   "seq": 7,
    "at": 1791816720000,
    "type": "claim.stale",
    "claims": [
@@ -749,7 +841,7 @@
    }
   },
   {
-   "seq": 4,
+   "seq": 8,
    "at": 1791816720000,
    "type": "claim.stale",
    "claims": [
@@ -764,7 +856,7 @@
    }
   },
   {
-   "seq": 5,
+   "seq": 9,
    "at": 1791816720000,
    "type": "claim.stale",
    "claims": [
@@ -779,7 +871,7 @@
    }
   },
   {
-   "seq": 6,
+   "seq": 10,
    "at": 1791816720000,
    "type": "claim.stale",
    "claims": [
@@ -794,7 +886,7 @@
    }
   },
   {
-   "seq": 7,
+   "seq": 11,
    "at": 1791816720000,
    "type": "reality.at_risk",
    "claims": [
@@ -808,7 +900,7 @@
    }
   },
   {
-   "seq": 8,
+   "seq": 12,
    "at": 1791816750000,
    "type": "finding.filed",
    "claims": [
@@ -819,7 +911,7 @@
    }
   },
   {
-   "seq": 9,
+   "seq": 13,
    "at": 1791816810000,
    "type": "finding.refuted",
    "claims": [
@@ -830,7 +922,7 @@
    }
   },
   {
-   "seq": 10,
+   "seq": 14,
    "at": 1791816870000,
    "type": "claim.replanned",
    "claims": [
@@ -841,7 +933,7 @@
    }
   },
   {
-   "seq": 11,
+   "seq": 15,
    "at": 1791816900000,
    "type": "finding.filed",
    "claims": [
@@ -852,7 +944,7 @@
    }
   },
   {
-   "seq": 12,
+   "seq": 16,
    "at": 1791816930000,
    "type": "finding.verified",
    "claims": [
@@ -863,7 +955,7 @@
    }
   },
   {
-   "seq": 13,
+   "seq": 17,
    "at": 1791816930000,
    "type": "claim.helped",
    "claims": [
@@ -875,7 +967,21 @@
    }
   },
   {
-   "seq": 14,
+   "seq": 18,
+   "at": 1791816990000,
+   "type": "claim.landing_failed",
+   "claims": [
+    "c20"
+   ],
+   "data": {
+    "status": "conflict",
+    "files": [
+     "src/api/routes.ts"
+    ]
+   }
+  },
+  {
+   "seq": 19,
    "at": 1791817020000,
    "type": "scope.touched",
    "claims": [
@@ -890,7 +996,7 @@
    }
   },
   {
-   "seq": 15,
+   "seq": 20,
    "at": 1791817080000,
    "type": "claim.checked",
    "claims": [
@@ -903,7 +1009,7 @@
    }
   },
   {
-   "seq": 16,
+   "seq": 21,
    "at": 1791817110000,
    "type": "finding.filed",
    "claims": [
@@ -914,7 +1020,7 @@
    }
   },
   {
-   "seq": 17,
+   "seq": 22,
    "at": 1791817140000,
    "type": "claim.checked",
    "claims": [
@@ -1138,7 +1244,36 @@
    ],
    "outside": [],
    "accepted": true,
-   "verdict": "budget-exhausted"
+   "verdict": "budget-exhausted",
+   "checks": {
+    "status": "timeout",
+    "command": "npm test",
+    "exitCode": 1,
+    "finishedAt": 1791817146000,
+    "log": "checks overran their 300s timebox; stopped",
+    "startedAt": 1791816846000
+   }
+  },
+  {
+   "claim": "c20",
+   "sha": "71394159ffbdc5ad35e0ce3456fa20d5112f2c39",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816948000,
+   "paths": [
+    "src/api/keys.ts",
+    "src/api/routes.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-passed",
+   "checks": {
+    "status": "passed",
+    "command": "npm test",
+    "exitCode": 0,
+    "finishedAt": 1791816976000,
+    "startedAt": 1791816954000
+   }
   },
   {
    "claim": "c15",
@@ -1172,21 +1307,49 @@
    ],
    "outside": [],
    "accepted": true,
-   "verdict": "unverified"
+   "verdict": "unverified",
+   "checks": {
+    "status": "skipped",
+    "command": "npm test",
+    "exitCode": 1,
+    "finishedAt": 1791817140000,
+    "log": "no checks declared",
+    "startedAt": 1791817140000
+   }
   }
  ],
  "lines": [
   {
    "name": "main",
-   "repo": "demo.line.main",
-   "head": "1822562e6f0f2444bd907e99197d5656c194d113",
-   "served": true
+   "repo": {
+    "name": "demo.line.main",
+    "remote": "https://artifacts.example/superpose/demo.line.main.git"
+   },
+   "head": "2132a4dd58fda946585749bfc7f94a13656dcac3",
+   "served": true,
+   "decision": "Where do dates become local time?",
+   "option": "in each feature, as needed",
+   "landing": {
+    "claim": "c7",
+    "sha": "a09406fb78bb62e88dbb2de910945396be300261",
+    "startedAt": 1791817182000
+   }
   },
   {
    "name": "tz-utc",
-   "repo": "demo.line.tz-utc",
+   "repo": {
+    "name": "demo.line.tz-utc",
+    "remote": "https://artifacts.example/superpose/demo.line.tz-utc.git"
+   },
    "head": "dfd3709bc0c903b921ebd61ecd99f4a00d96e679",
-   "served": false
+   "served": false,
+   "from": "main",
+   "inherits": [
+    "c8",
+    "c13"
+   ],
+   "decision": "Where do dates become local time?",
+   "option": "only at the edge, stored as UTC"
   }
  ]
 }

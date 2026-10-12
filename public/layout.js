@@ -60,14 +60,17 @@ export function relations(nodes, edges) {
   const supersedes = new Map(); // new claim -> claims it replaces
   const supersededBy = new Map(); // old claim -> claims replacing it
   const dependents = new Map(); // assumption or claim -> claims resting / building on it
+  const firstAssumption = new Map(); // claim -> the first assumption it declared (edge order)
   for (const e of edges) {
     const s = index.get(e.source);
     const t = index.get(e.target);
     if (!s || !t) continue;
     if (e.purpose === 'required for' && t.kind === 'claim') {
       if (s.kind === 'claim') push(claimParents, t.id, s.id);
-      else if (s.kind === 'assumption') push(assumptionParents, t.id, s.id);
-      else continue;
+      else if (s.kind === 'assumption') {
+        push(assumptionParents, t.id, s.id);
+        if (!firstAssumption.has(t.id)) firstAssumption.set(t.id, s.id);
+      } else continue;
       push(dependents, s.id, t.id);
     } else if (e.purpose === 'supersedes' && s.kind === 'claim' && t.kind === 'claim') {
       push(supersedes, s.id, t.id);
@@ -77,7 +80,7 @@ export function relations(nodes, edges) {
   for (const m of [claimParents, assumptionParents, supersedes, supersededBy, dependents]) {
     for (const list of m.values()) list.sort(cmpId);
   }
-  return { index, claimParents, assumptionParents, supersedes, supersededBy, dependents };
+  return { index, claimParents, assumptionParents, supersedes, supersededBy, dependents, firstAssumption };
 }
 
 // Every claim downstream of the given nodes through "required for" edges,
@@ -119,13 +122,14 @@ export function computeLayout(nodes, edges, opts = {}) {
   findings.sort(byNodeId);
 
   // One parent per claim for the tree: a claim it builds on keeps a chain
-  // together; otherwise the first assumption it rests on; otherwise the claim
-  // it replaces, so a new version sits under its old one.
+  // together; otherwise the first assumption it declared (a re-plan declares
+  // its new one first, so the claim moves there); otherwise the claim it
+  // replaces, so a new version sits under its old one.
   const primary = new Map();
   for (const c of claims) {
     const p =
       rel.claimParents.get(c.id)?.[0] ??
-      rel.assumptionParents.get(c.id)?.[0] ??
+      rel.firstAssumption.get(c.id) ??
       rel.supersedes.get(c.id)?.[0] ??
       null;
     primary.set(c.id, p);

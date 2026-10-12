@@ -56,6 +56,7 @@
       <symbol id="i-reality" viewBox="0 0 16 16"><circle cx="6" cy="8" r="3.6"/><circle cx="10" cy="8" r="3.6"/></symbol>
       <symbol id="i-spin" viewBox="0 0 16 16"><path d="M8 2.6a5.4 5.4 0 105.4 5.4"/></symbol>
       <symbol id="i-plus-c" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.7"/><path d="M8 5.4v5.2M5.4 8h5.2"/></symbol>
+      <symbol id="i-external" viewBox="0 0 16 16"><path d="M9.4 2.6h4v4M13.2 2.8L7.6 8.4"/><path d="M12 9.6v3.2a.8.8 0 01-.8.8H3.2a.8.8 0 01-.8-.8V4.8a.8.8 0 01.8-.8h3.2"/></symbol>
       <symbol id="i-flag" viewBox="0 0 16 16"><path d="M3.6 14V2.6M3.6 3h8.2l-1.9 3 1.9 3H3.6"/></symbol>
     </defs>
   </svg>
@@ -109,7 +110,7 @@
       </div>
       <div class="bar-stats" id="stats"></div>
       <div class="bar-right">
-        <div class="serving" id="serving" hidden></div>
+        <div class="realities" id="realities" hidden></div>
         <button class="icon-btn" id="btn-feed" type="button" title="Events panel (E)" aria-label="Toggle the events panel" aria-pressed="true"><svg class="i"><use href="#i-list"/></svg></button>
         <button class="icon-btn" id="btn-theme" type="button" title="Theme" aria-label="Switch theme"><svg class="i"><use href="#i-system"/></svg></button>
       </div>
@@ -130,6 +131,7 @@
           </svg>
           <div class="nodes" id="nodes"></div>
         </div>
+        <div class="strip" id="strip" hidden aria-label="Realities"></div>
         <div class="banner" id="banner" hidden></div>
         <div class="empty" id="empty" hidden></div>
         <div class="legend" id="legend" aria-label="Legend">

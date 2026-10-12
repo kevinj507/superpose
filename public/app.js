@@ -161,6 +161,8 @@ function startCanvas(gid) {
   $('gid').title = `Graph ${gid}`;
   const fx = new URLSearchParams(location.search).get('fixture');
   if (fx && /^\/[A-Za-z0-9_\-./]+\.json$/.test(fx) && !fx.includes('..')) S.fixture = fx;
+  // A fixture is read once, unless &poll asks for it to be watched like a graph.
+  S.fixturePoll = new URLSearchParams(location.search).has('poll');
 
   const app = $('app');
   const side = store.get(SIDE_KEY);
@@ -173,7 +175,7 @@ function startCanvas(gid) {
   renderHeader(true);
   setInterval(tick, 250);
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && !S.fixture) {
+    if (!document.hidden && (!S.fixture || S.fixturePoll)) {
       clearTimeout(S.timer);
       poll();
     }
@@ -193,7 +195,7 @@ async function poll() {
     if (S.failures >= 2 || !S.loaded) setConn('offline', err);
     console.warn('[superpose] snapshot failed:', err);
   }
-  if (S.fixture || document.hidden) return;
+  if ((S.fixture && !S.fixturePoll) || document.hidden) return;
   const wait = S.failures ? Math.min(POLL_MS * 2 ** S.failures, 15_000) : POLL_MS;
   S.timer = setTimeout(poll, wait);
 }
@@ -201,9 +203,18 @@ async function poll() {
 async function load() {
   const url = S.fixture ?? `/api/graphs/${encodeURIComponent(S.gid)}/snapshot`;
   const sent = Date.now();
-  const res = await fetch(url, { cache: 'no-store', headers: { accept: 'application/json' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const snap = await res.json();
+  // A request that never comes back must not freeze the canvas: give up and retry.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10_000);
+  let res;
+  let snap;
+  try {
+    res = await fetch(url, { cache: 'no-store', headers: { accept: 'application/json' }, signal: ctl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    snap = await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
   const got = Date.now();
   if (S.fixture) {
     // A fixture is frozen at `now`; move it to the present so leases tick.
@@ -308,10 +319,19 @@ function apply(snap) {
   renderNodes(first);
   applySelection();
   renderHeader(first);
-  renderServing(first);
+  renderRealities();
+  applyLineFocus();
   renderInspector();
   renderFeed();
   renderEmpty();
+  for (const sc of scenes) {
+    if (sc.type !== 'at_risk') continue;
+    const prop = scenes.find((x) => x.type === 'propagation' && x.f.id === sc.fid);
+    if (prop) {
+      prop.landedAtRisk = sc.claims;
+      sc.quiet = true;
+    }
+  }
   for (const sc of scenes) playScene(sc);
   if (S.selected && next.get(S.selected)?.kind === 'finding' && (!S.impact || Date.now() - S.impact.at > 3000)) {
     loadImpact(S.selected);
@@ -380,7 +400,8 @@ function displayStatus(n) {
 // --------------------------------------------------------------- layout --
 
 function fitPadding() {
-  return narrowQuery.matches ? { t: 14, r: 14, b: 70, l: 14 } : { t: 26, r: 68, b: 84, l: 30 };
+  const strip = $('canvas').classList.contains('has-strip') ? 46 : 0;
+  return narrowQuery.matches ? { t: 14 + strip, r: 14, b: 70, l: 14 } : { t: 26 + strip, r: 68, b: 84, l: 30 };
 }
 
 function canvasAspect() {
@@ -701,7 +722,7 @@ function wireCanvas() {
     { passive: false },
   );
   canvas.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.zoom, .legend')) return;
+    if (e.target.closest('.zoom, .legend, .strip')) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     P.pts.set(e.pointerId, local(e));
     if (P.pts.size === 1) {
@@ -781,7 +802,10 @@ function wireCanvas() {
 
   window.addEventListener('keydown', (e) => {
     if (e.target.closest?.('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === 'Escape') select(null);
+    if (e.key === 'Escape') {
+      select(null);
+      if (S.lineFocus) focusLine(S.lineFocus);
+    }
     else if (e.key === 'f' || e.key === 'F') {
       setFollow(true);
       fit(true);
@@ -830,6 +854,12 @@ function toggleSide(force) {
 }
 
 function wireSide() {
+  for (const id of ['realities', 'strip']) {
+    $(id).addEventListener('click', (e) => {
+      const chipEl = e.target.closest('.line-chip');
+      if (chipEl) focusLine(chipEl.dataset.line);
+    });
+  }
   $('btn-feed').addEventListener('click', () => toggleSide());
   $('sheet-handle').addEventListener('click', () => $('app').classList.toggle('sheet-open'));
   $('side').addEventListener('click', (e) => {
@@ -916,19 +946,42 @@ function applySelection() {
 
 async function loadImpact(fid) {
   const f = S.nodes.get(fid);
-  if (!f) return;
+  if (!f || S.impactLoading === fid) return;
+  S.impactLoading = fid;
+  try {
+    await loadImpactNow(f, fid);
+  } finally {
+    S.impactLoading = null;
+  }
+}
+
+async function loadImpactNow(f, fid) {
   let imp = null;
   if (!S.fixture) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
     try {
-      const res = await fetch(`/api/graphs/${encodeURIComponent(S.gid)}/findings/${encodeURIComponent(fid)}/impact`, { cache: 'no-store' });
+      const res = await fetch(`/api/graphs/${encodeURIComponent(S.gid)}/findings/${encodeURIComponent(fid)}/impact`, {
+        cache: 'no-store',
+        signal: ctl.signal,
+      });
       if (res.ok) imp = await res.json();
     } catch {
       // fall back to working it out here
+    } finally {
+      clearTimeout(timer);
     }
   }
   if (!imp || !Array.isArray(imp.affected)) imp = localImpact(f);
   if (S.selected !== fid) return;
-  S.impact = { finding: fid, affected: imp.affected ?? [], landedAtRisk: imp.landedAtRisk ?? [], cost: Number(imp.cost) || 0, at: Date.now() };
+  S.impact = {
+    finding: fid,
+    affected: imp.affected ?? [],
+    landedAtRisk: imp.landedAtRisk ?? [],
+    cost: Number(imp.cost) || 0,
+    realities: Array.isArray(imp.realities) ? imp.realities : localRealities(imp.affected ?? [], imp.landedAtRisk ?? []),
+    at: Date.now(),
+  };
   applyRisk();
   renderInspector();
 }
@@ -949,7 +1002,17 @@ function localImpact(f) {
       cost += c.pushes ?? 0;
     }
   }
-  return { affected, landedAtRisk, cost };
+  return { affected, landedAtRisk, cost, realities: localRealities(affected, landedAtRisk) };
+}
+
+function localRealities(affected, landedAtRisk) {
+  const lineOf = new Map();
+  for (const n of S.nodes.values()) if (n.kind === 'claim') lineOf.set(n.id, n.line || 'main');
+  return realityLines().map((l) => {
+    const mine = affected.filter((id) => lineOf.get(id) === l.name);
+    const landed = landedAtRisk.filter((id) => lineOf.get(id) === l.name || (l.inherits ?? []).includes(id));
+    return { line: l.name, served: !!l.served, affected: mine, landedAtRisk: landed, safe: !mine.length && !landed.length };
+  });
 }
 
 // While an unverified finding is selected, outline what verifying it would stop.
@@ -957,7 +1020,7 @@ function applyRisk() {
   const imp = S.impact;
   const f = imp ? S.nodes.get(imp.finding) : null;
   const on = !!(f && f.status === 'unverified' && S.selected === f.id);
-  const risk = new Set(on ? imp.affected : []);
+  const risk = new Set(on ? [...imp.affected, ...imp.landedAtRisk] : []);
   for (const [id, rec] of S.els) rec.el.classList.toggle('is-risk', risk.has(id));
   S.riskEdges = new Set();
   if (on && S.layout) {
@@ -1020,6 +1083,7 @@ function renderNode(n, ctx, { quiet = false } = {}) {
   const base = ['node', `k-${n.kind}`, `s-${status}`];
   if (n.kind === 'claim' && status === 'open' && openState(n).ready) base.push('is-ready');
   if (n.kind === 'claim' && status === 'landed' && contradictedUpstream(n.id).length) base.push('is-reality-risk');
+  if (n.kind === 'claim' && status === 'done' && ['conflict', 'failed', 'error'].includes(n.landing?.status)) base.push('is-stuck');
   if (n.kind === 'finding') base.push(`fx-${n.effect === 'helps' ? 'helps' : 'contradicts'}`);
   for (const c of rec.base) if (!base.includes(c)) rec.el.classList.remove(c);
   for (const c of base) if (!rec.base.includes(c)) rec.el.classList.add(c);
@@ -1039,7 +1103,18 @@ function headRow(c) {
   return c.headSha ? S.pushRows.get(c.id)?.find((r) => r.sha === c.headSha) : undefined;
 }
 
-const VERDICT_ICON = { passed: 'check', failed: 'x', scope: 'warn', verifier: 'warn', budget: 'clock', unverified: 'dot', running: 'spin', unknown: 'dot' };
+const VERDICT_ICON = {
+  passed: 'check',
+  failed: 'x',
+  scope: 'warn',
+  verifier: 'warn',
+  budget: 'clock',
+  timeout: 'clock',
+  skipped: 'dot',
+  unverified: 'dot',
+  running: 'spin',
+  unknown: 'dot',
+};
 
 function badgeHTML(v, title = '') {
   return `<span class="badge ${v.tone}"${title ? ` title="${esc(title)}"` : ''}>${icon(VERDICT_ICON[v.key] ?? 'dot')}${esc(v.label)}</span>`;
@@ -1056,16 +1131,29 @@ function agentHTML(name, gone = false) {
   return `<span class="agent${gone ? ' gone' : ''}" title="Agent ${esc(name)}"><span class="av" style="--h:${hue(name)}">${esc(initial)}</span><span class="name">${esc(name)}</span></span>`;
 }
 
+// A claim that builds on another waits for it to land: its fork then
+// contains the work it builds on.
 function openState(c) {
   const waits = [];
   const blocked = [];
   for (const a of S.rel.assumptionParents.get(c.id) ?? []) if (S.nodes.get(a)?.status !== 'holding') blocked.push(a);
-  for (const p of S.rel.claimParents.get(c.id) ?? []) {
-    const s = S.nodes.get(p)?.status;
-    if (s !== 'done' && s !== 'landed') waits.push(p);
-  }
+  for (const p of S.rel.claimParents.get(c.id) ?? []) if (S.nodes.get(p)?.status !== 'landed') waits.push(p);
   return { ready: !waits.length && !blocked.length, waits, blocked };
 }
+
+function waitsText(waits) {
+  const done = waits.filter((p) => S.nodes.get(p)?.status === 'done');
+  const list = waits.slice(0, 3).join(', ') + (waits.length > 3 ? '…' : '');
+  return done.length === waits.length ? `waits for ${list} to land` : `waits on ${list}`;
+}
+
+const LANDING_WORDS = {
+  queued: 'queued to land',
+  landing: 'landing…',
+  conflict: 'conflict',
+  failed: 'checks failed after merge',
+  error: 'landing error',
+};
 
 // Contradicted assumptions under a claim, directly or through what it builds on.
 function contradictedUpstream(id, seen = new Set()) {
@@ -1101,6 +1189,8 @@ function claimHTML(c, status, ctx) {
   const kept = c.kept?.length ? c.kept[c.kept.length - 1] : null;
   if (status === 'stale' && kept) {
     right = `<span class="kept" title="Work kept at ${esc(kept.sha)}: ${esc(kept.reason)}">${icon('branch')}${esc(shortSha(kept.sha))}</span>`;
+  } else if (status === 'done' && (c.landing?.status === 'conflict' || c.landing?.status === 'failed' || c.landing?.status === 'error')) {
+    right = `<span class="badge bad">${icon('warn')}${esc(c.landing.status === 'conflict' ? 'conflict' : 'not landed')}</span>`;
   } else {
     const head = headRow(c);
     const v = verdictOf(head);
@@ -1113,9 +1203,11 @@ function claimHTML(c, status, ctx) {
   let bar = '';
   switch (status) {
     case 'claimed':
-      if (lease) {
+      if (lease && live) {
         foot = `${agentHTML(lease.holder)}<span class="grow"></span><span class="cd" data-exp="${lease.expiresAt}" data-mode="lease" title="Lease ends in">${icon('clock')}<span class="t"></span></span>`;
         bar = `<div class="lease" data-bar="${lease.expiresAt}"><i></i></div>`;
+      } else if (lease) {
+        foot = `${agentHTML(lease.holder, true)}<span class="grow"></span><span class="told" title="Its agent stopped renewing; the next agent can take it over">lapsed · up for grabs</span>`;
       } else foot = '<span class="grow">no live lease</span>';
       break;
     case 'stale': {
@@ -1134,17 +1226,26 @@ function claimHTML(c, status, ctx) {
       const st = openState(c);
       if (st.ready) foot = `<span class="grow ready">ready to claim</span>`;
       else if (st.blocked.length) foot = `<span class="grow blocked">blocked: ${esc(st.blocked.join(', '))} contradicted</span>`;
-      else foot = `<span class="grow">waits on ${esc(st.waits.slice(0, 3).join(', '))}${st.waits.length > 3 ? '…' : ''}</span>`;
+      else foot = `<span class="grow">${esc(waitsText(st.waits))}</span>`;
       break;
     }
-    case 'done':
-      foot = '<span class="grow">done · awaiting landing</span>';
+    case 'done': {
+      const l = c.landing;
+      if (l?.status === 'landing') foot = `<span class="grow landing-run">${icon('spin')}landing on ${esc(c.line || 'main')}…</span>`;
+      else if (l?.status === 'conflict') foot = `<span class="grow landing-bad">${icon('warn')}conflict in ${plural(l.files?.length ?? 0, 'file')}</span>`;
+      else if (l?.status === 'failed' || l?.status === 'error') foot = `<span class="grow landing-bad">${icon('warn')}${esc(LANDING_WORDS[l.status])}</span>`;
+      else if (l?.status === 'queued') foot = '<span class="grow">done · queued to land</span>';
+      else {
+        const waits = (S.rel.claimParents.get(c.id) ?? []).filter((p) => S.nodes.get(p)?.status !== 'landed');
+        foot = `<span class="grow">done · ${waits.length ? esc(`lands after ${waits.slice(0, 2).join(', ')}`) : 'awaiting landing'}</span>`;
+      }
       break;
+    }
     case 'landed': {
       const bad = contradictedUpstream(c.id);
       foot = bad.length
         ? `<span class="grow blocked" title="It rests on ${esc(bad.join(', '))}, now contradicted">landed · at risk: ${esc(bad.join(', '))} contradicted</span>`
-        : `<span class="grow">landed on <b>${esc(c.line || 'main')}</b></span>`;
+        : `<span class="grow">landed on <b>${esc(c.line || 'main')}</b></span>${c.landedSha ? `<span class="kept" title="Merge commit ${esc(c.landedSha)}">${esc(shortSha(c.landedSha))}</span>` : ''}`;
       break;
     }
     case 'superseded': {
@@ -1314,43 +1415,131 @@ function renderHeader(first, quiet = false) {
   }
 }
 
-function renderServing(first) {
-  const el = $('serving');
-  const lines = S.lines;
-  const served = lines?.find((l) => l.served) ?? null;
-  const name = served?.name ?? null;
-  const prev = S.served;
-  S.served = lines ? name : undefined;
-  if (!lines || !lines.length) {
-    el.hidden = true;
+// The realities: every line, which one is served, how many claims build on
+// each, and the decision a line is an option of. Click one to pick out its claims.
+function realityLines() {
+  const lines = (S.lines ?? []).map((l) => ({ ...l }));
+  for (const n of S.nodes.values()) {
+    if (n.kind !== 'claim') continue;
+    const name = n.line || 'main';
+    if (!lines.some((l) => l.name === name)) lines.push({ name, served: false, implicit: true });
+  }
+  if (lines.length && !lines.some((l) => l.served)) (lines.find((l) => l.name === 'main') ?? lines[0]).served = true;
+  return lines;
+}
+
+function renderRealities() {
+  const head = $('realities');
+  const strip = $('strip');
+  const lines = realityLines();
+  const canvas = $('canvas');
+  if (!lines.length) {
+    head.hidden = true;
+    strip.hidden = true;
+    canvas.classList.remove('has-strip');
+    S.served = undefined;
     return;
   }
-  const others = lines.length - (served ? 1 : 0);
-  el.innerHTML = `${icon('reality')}<span class="eyebrow">Serving</span><b>${esc(name ?? 'nothing')}</b>${
-    served?.head ? `<code>${esc(shortSha(served.head))}</code>` : ''
-  }${others ? `<span class="others">+${others} ${others === 1 ? 'line' : 'lines'}</span>` : ''}`;
-  el.title = `The line (one reality's code) being served.\n${lines
-    .map((l) => `${l.served ? '●' : '○'} ${l.name}${l.head ? ` @ ${shortSha(l.head)}` : ''}${l.repo ? `  (${l.repo})` : ''}`)
-    .join('\n')}`;
-  el.hidden = false;
-  if (!first && prev !== undefined && name !== prev) {
-    addTemp(el, ['switched'], 2500);
-    showBanner({
-      tone: 'reality',
-      icon: 'reality',
-      eyebrow: 'Reality switch',
-      html: `Now serving <b>${esc(name ?? 'nothing')}</b>${prev ? ` <span class="ok">— was ${esc(prev)}</span>` : ''}`,
-    });
-    addFeed({
-      key: `serve:${++S.diffSeq}`,
-      at: serverNow(),
-      tone: 'land',
-      icon: 'reality',
-      html: `Reality switch: now serving <b>${esc(name ?? 'nothing')}</b>${prev ? ` (was ${esc(prev)})` : ''}`,
-      fresh: true,
-    });
-    renderFeed();
+  const count = new Map();
+  for (const c of S.nodes.values()) {
+    if (c.kind === 'claim' && c.status !== 'superseded') count.set(c.line || 'main', (count.get(c.line || 'main') ?? 0) + 1);
   }
+  const served = lines.find((l) => l.served);
+  const titleOf = (l) => {
+    const n = count.get(l.name) ?? 0;
+    return [
+      `${l.served ? 'Served reality' : 'Not served'}: line ${l.name}`,
+      l.decision ? `Decision: ${l.decision}` : '',
+      l.option ? `Option: ${l.option}` : '',
+      l.from ? `Forked from ${l.from}${l.inherits?.length ? `, carrying ${l.inherits.join(', ')}` : ''}` : '',
+      l.head ? `Head ${shortSha(l.head)}` : 'No commits landed yet',
+      l.landing ? `Landing ${l.landing.claim} now` : '',
+      `${plural(n, 'claim')} build on it`,
+      'Click to pick out its claims',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  };
+  const chipOf = (l, withOption) => {
+    const opt = withOption && l.option ? `<span class="opt">${esc(l.option.length > 34 ? `${l.option.slice(0, 33)}…` : l.option)}</span>` : '';
+    const spin = l.landing ? `<span class="spin" title="Landing ${esc(l.landing.claim)}">${icon('spin')}</span>` : '';
+    return `<button type="button" class="line-chip${l.served ? ' served' : ''}${S.lineFocus === l.name ? ' focused' : ''}" data-line="${esc(l.name)}" title="${esc(titleOf(l))}">${
+      l.served ? icon('reality') : '<i class="ring"></i>'
+    }<b>${esc(l.name)}</b>${opt}<span class="n">${count.get(l.name) ?? 0}</span>${spin}</button>`;
+  };
+
+  // The header: which reality is served, and the app it serves.
+  const link = `<a class="icon-btn served-link" href="/served/${encodeURIComponent(S.gid)}/" target="_blank" rel="noopener" title="Open the served app (${esc(served.name)})" aria-label="Open the served app">${icon('external')}</a>`;
+  const headHtml = `<span class="eyebrow">Serving</span>${chipOf(served, false)}${link}`;
+  if (head._html !== headHtml) {
+    head.innerHTML = headHtml;
+    head._html = headHtml;
+  }
+  head.hidden = false;
+
+  // The strip: every reality, options of one decision side by side.
+  const many = lines.length > 1;
+  if (many) {
+    const groups = new Map();
+    const loose = [];
+    for (const l of lines) {
+      if (!l.decision) loose.push(l);
+      else {
+        if (!groups.has(l.decision)) groups.set(l.decision, []);
+        groups.get(l.decision).push(l);
+      }
+    }
+    // A fork made as "the other option" leaves its source as the first one.
+    for (const ls of groups.values()) {
+      if (ls.length !== 1 || !ls[0].from) continue;
+      const i = loose.findIndex((l) => l.name === ls[0].from);
+      if (i >= 0) ls.unshift(...loose.splice(i, 1));
+    }
+    const parts = [];
+    for (const [decision, ls] of groups) {
+      parts.push(
+        `<span class="decision" title="${esc(decision)}">${esc(decision.length > 56 ? `${decision.slice(0, 55)}…` : decision)}</span>${ls
+          .map((l) => chipOf(l, true))
+          .join('<span class="or">or</span>')}`,
+      );
+    }
+    if (loose.length) parts.push(loose.map((l) => chipOf(l, true)).join(''));
+    const stripHtml = `<span class="eyebrow">Realities</span>${parts.join('<span class="sep"></span>')}`;
+    if (strip._html !== stripHtml) {
+      strip.innerHTML = stripHtml;
+      strip._html = stripHtml;
+    }
+  }
+  if (strip.hidden === many || canvas.classList.contains('has-strip') !== many) {
+    strip.hidden = !many;
+    canvas.classList.toggle('has-strip', many);
+    if (S.follow && S.layout) fit(S.loaded);
+  }
+
+  const prev = S.served;
+  S.served = served.name;
+  // A switch seen without its event (after a reconnect, say) still shows.
+  if (prev !== undefined && prev !== served.name && !S.servedEventSeen) flashServed();
+  S.servedEventSeen = false;
+}
+
+function flashServed() {
+  for (const el of document.querySelectorAll('#realities .line-chip.served, #strip .line-chip.served')) addTemp(el, ['switched'], 2500);
+}
+
+function applyLineFocus() {
+  const on = !!S.lineFocus;
+  $('canvas').classList.toggle('has-line-focus', on);
+  for (const [id, rec] of S.els) {
+    const n = S.nodes.get(id);
+    rec.el.classList.toggle('on-line', on && n?.kind === 'claim' && (n.line || 'main') === S.lineFocus);
+  }
+}
+
+function focusLine(name) {
+  S.lineFocus = S.lineFocus === name ? null : name;
+  applyLineFocus();
+  renderRealities();
 }
 
 function renderEmpty() {
@@ -1413,8 +1602,6 @@ function feedFromDiff(prev, next) {
         push({ tone: 'claim', icon: 'agent', html: `${agentHTML(n.lease?.holder ?? 'an agent')} claimed ${chip(id, next)}` });
       } else if (n.status === 'done') {
         push({ tone: 'good', icon: 'check', html: `${chip(id, next)} done${p.lease ? ` by ${agentHTML(p.lease.holder)}` : ''} — awaiting landing` });
-      } else if (n.status === 'landed') {
-        push({ tone: 'land', icon: 'flag', html: `${chip(id, next)} landed on <b>${esc(n.line || 'main')}</b>` });
       } else if (n.status === 'open' && p.status === 'claimed') {
         push({ tone: 'muted', icon: 'back', html: `${p.lease ? agentHTML(p.lease.holder) : 'Its agent'} released ${chip(id, next)}` });
       } else if (n.status === 'superseded') {
@@ -1519,6 +1706,11 @@ function sceneFor(ev, stale, prev) {
       return { type: 'replanned', claims: ev.claims ?? [] };
     case 'reality.at_risk':
       return { type: 'at_risk', claims: ev.claims ?? [], fid };
+    case 'reality.served':
+      S.servedEventSeen = true;
+      return { type: 'served', line: ev.data?.line, previous: ev.data?.previous ?? null };
+    case 'claim.landing_failed':
+      return { type: 'landing_failed', claims: ev.claims ?? [], status: ev.data?.status, files: ev.data?.files ?? [] };
     case 'scope.touched':
       return { type: 'touched', claims: ev.claims ?? [] };
     default:
@@ -1585,15 +1777,19 @@ function playScene(sc) {
         (n) => n.kind === 'claim' && n.status === 'claimed' && !affected.has(n.id) && n.lease && n.lease.expiresAt > now,
       ).length;
       const as = targets.map((a) => `<b>${esc(a)}</b>`).join(', ');
+      const risk = sc.landedAtRisk?.length
+        ? ` · <b class="stale">${plural(sc.landedAtRisk.length, 'landed claim')} at risk</b>`
+        : '';
       later(T_HIT, () =>
         showBanner({
           tone: 'stale',
           icon: 'bolt',
           eyebrow: 'Finding verified',
-          html: `<b>${esc(f.id)}</b> contradicts ${as || 'an assumption'} → <b class="stale">${plural(hits.length, 'claim')} stale</b> <span class="ok">· ${working} keep working</span>`,
+          html: `<b>${esc(f.id)}</b> contradicts ${as || 'an assumption'} → <b class="stale">${plural(hits.length, 'claim')} stale</b>${risk} <span class="ok">· ${working} keep working</span>`,
           ms: last + 7000,
         }),
       );
+      for (const id of sc.landedAtRisk ?? []) later(T_FIRST, () => addTemp(elOf(id), ['scene-stale'], 1600));
       break;
     }
     case 'filed': {
@@ -1622,7 +1818,25 @@ function playScene(sc) {
     case 'touched':
       for (const id of sc.claims) addTemp(elOf(id), ['flash'], 1400);
       break;
+    case 'served': {
+      later(50, flashServed);
+      showBanner({
+        tone: 'reality',
+        icon: 'reality',
+        eyebrow: 'Reality switch',
+        html: `Now serving <b>${esc(sc.line ?? '?')}</b>${sc.previous ? ` <span class="ok">— was ${esc(sc.previous)}, kept as it was</span>` : ''}`,
+        ms: 6500,
+      });
+      break;
+    }
+    case 'landing_failed':
+      for (const id of sc.claims) addTemp(elOf(id), ['scene-stale'], 1600);
+      break;
     case 'at_risk':
+      if (sc.quiet) {
+        for (const id of sc.claims) addTemp(elOf(id), ['flash'], 1400);
+        break;
+      }
       showBanner({
         tone: 'stale',
         icon: 'warn',
@@ -1776,7 +1990,11 @@ function inspectClaim(c) {
   out += `<dt>Head</dt><dd>${
     c.headSha ? `<code title="${esc(c.headSha)}">${esc(shortSha(c.headSha))}</code> ${v ? badgeHTML(v) : ''}` : '<span class="muted">no accepted push yet</span>'
   }</dd>`;
-  out += `<dt>Pushes</dt><dd>${esc(c.pushes ?? 0)}</dd></dl>`;
+  out += `<dt>Pushes</dt><dd>${esc(c.pushes ?? 0)}</dd>`;
+  if (Number.isFinite(c.finishedAt)) out += `<dt>Finished</dt><dd>${esc(timeOfDay(c.finishedAt))}</dd>`;
+  if (c.landedSha) out += `<dt>Merged as</dt><dd><code title="${esc(c.landedSha)}">${esc(shortSha(c.landedSha))}</code> <span class="muted">on ${esc(c.line || 'main')}</span></dd>`;
+  out += '</dl>';
+  if (c.landing) out += sec('Landing', landingHTML(c));
 
   out += sec(
     'Scope',
@@ -1844,6 +2062,21 @@ function ledgerRow(r, c) {
   return `${h}</div>`;
 }
 
+function landingHTML(c) {
+  const l = c.landing;
+  const bad = l.status === 'conflict' || l.status === 'failed' || l.status === 'error';
+  const tone = bad ? 'bad' : l.status === 'landing' ? 'run' : 'muted';
+  const ic = bad ? 'warn' : l.status === 'landing' ? 'spin' : 'clock';
+  const line = esc(c.line || 'main');
+  let h = `<div class="lrow${bad ? ' bad' : ''}"><div class="lrow-top"><span class="badge ${tone}">${icon(ic)}${esc(LANDING_WORDS[l.status] ?? l.status)}</span><span class="muted">into ${line}</span><span class="when">${esc(timeOfDay(l.at))}</span></div>`;
+  if (l.files?.length) h += `<ul class="paths">${l.files.map((f) => `<li class="conf">${esc(f)}</li>`).join('')}</ul>`;
+  if (l.log) h += `<pre class="log">${esc(tailOf(l.log))}</pre>`;
+  if (l.status === 'landing') h += `<p class="note">Merging into ${line} and running the checks on the merged result. One landing at a time per line, in dependency order.</p>`;
+  else if (l.status === 'queued') h += '<p class="note">Waits its turn: one landing at a time per line.</p>';
+  else if (bad) h += `<p class="note warn">It waits for a decision: an agent brings it up to date with ${line} and finishes it again, or it is re-planned.</p>`;
+  return `${h}</div>`;
+}
+
 function tailOf(log) {
   const lines = String(log).split('\n');
   const tail = lines.slice(-30).join('\n');
@@ -1870,6 +2103,34 @@ function inspectAssumption(a) {
   if (through.length) out += sec('Through them', through.map(relRow).join(''), through.length);
   if (findings.length) out += sec('Findings', findings.map((f) => relRow(f.id)).join(''), findings.length);
   return out;
+}
+
+// Each reality's exposure to a finding: which one is safe to switch to.
+function realitiesHTML(f) {
+  const imp = S.impact?.finding === f.id ? S.impact : null;
+  const list = imp?.realities ?? [];
+  if (list.length < 2 && !list.some((r) => !r.safe)) return '';
+  const rows = list
+    .map((r) => {
+      const parts = [];
+      if (r.affected.length) parts.push(`${plural(r.affected.length, 'claim')} ${f.status === 'verified' ? 'stopped' : 'would stop'}`);
+      if (r.landedAtRisk.length) parts.push(`${plural(r.landedAtRisk.length, 'landed claim')} at risk`);
+      const what = parts.length ? parts.join(' · ') : 'rests on nothing it contradicts';
+      const pill = r.safe
+        ? `<span class="spill s-safe">${r.served ? 'safe' : 'safe to switch to'}</span>`
+        : '<span class="spill s-contradicted">at risk</span>';
+      return `<div class="reality-row"><span class="line-chip mini${r.served ? ' served' : ''}">${r.served ? icon('reality') : '<i class="ring"></i>'}<b>${esc(r.line)}</b></span><span class="t">${esc(what)}${
+        r.served ? ' <span class="muted">· served</span>' : ''
+      }</span>${pill}</div>`;
+    })
+    .join('');
+  const safeAlt = list.filter((r) => r.safe && !r.served).map((r) => r.line);
+  const servedAtRisk = list.some((r) => r.served && !r.safe);
+  const note =
+    servedAtRisk && safeAlt.length
+      ? `<p class="note">The served reality rests on what this finding contradicts; ${esc(safeAlt.join(', '))} does not. Switching is a pointer change, and the current reality stays as it is.</p>`
+      : '';
+  return sec('Realities', rows + note, list.length);
 }
 
 function inspectFinding(f) {
@@ -1900,6 +2161,7 @@ function inspectFinding(f) {
             }<p class="note">Until then it runs beside the others as a hedge, and nobody stops. Verifying it stops only these claims; their work is kept on a branch and each agent hears at its next renewal.</p>`
           : '<p class="note">Working out the reach…</p>',
       );
+      out += realitiesHTML(f);
     } else if (f.status === 'verified') {
       const made = staleBy(f.id);
       out += sec(
@@ -1909,6 +2171,7 @@ function inspectFinding(f) {
           : '<p class="note">No live claim rested on it.</p>',
         made.length,
       );
+      out += realitiesHTML(f);
     } else {
       out += sec('Refuted', '<p class="note">Kept in the graph, so the next agent to suspect the same thing is pointed here. Nobody else was stopped.</p>');
     }

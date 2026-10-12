@@ -69,8 +69,15 @@ export function timeOfDay(at) {
 // The verdict on one commit, as a short label and a tone for its badge.
 export function verdictOf(row) {
   if (!row) return null;
-  if (row.checks?.status === 'running' && row.verdict !== 'scope-violation') {
+  const checks = row.checks?.status;
+  if (checks === 'running' && row.verdict !== 'scope-violation') {
     return { key: 'running', label: 'checks running', tone: 'run' };
+  }
+  if (checks === 'timeout' && row.verdict !== 'scope-violation') {
+    return { key: 'timeout', label: 'timed out', tone: 'warn' };
+  }
+  if (checks === 'skipped' && row.verdict === 'unverified') {
+    return { key: 'skipped', label: 'no checks', tone: 'muted' };
   }
   switch (row.verdict) {
     case 'checks-passed':
@@ -199,6 +206,40 @@ export function describeEvent(ev, ctx = {}) {
         tone: good ? 'good' : d.verdict === 'checks-failed' || d.verdict === 'scope-violation' ? 'bad' : 'muted',
         icon: good ? 'check' : 'x',
         html: `${chips(claimsOf, nodes)} ${good ? 'checks passed' : esc(v?.label ?? 'checked')}${d.sha ? ` on <code>${esc(shortSha(d.sha))}</code>` : ''}`,
+      };
+    }
+    case 'claim.landed': {
+      const line = typeof d.line === 'string' ? d.line : 'its line';
+      const merge = typeof d.merge === 'string' ? d.merge : null;
+      return {
+        tone: 'land',
+        icon: 'flag',
+        html: `${chips(claimsOf, nodes)} landed on <b>${esc(line)}</b>${merge ? ` <code>${esc(shortSha(merge))}</code>` : ''}`,
+      };
+    }
+    case 'claim.landing_failed': {
+      const files = Array.isArray(d.files) ? d.files : [];
+      const why =
+        d.status === 'conflict'
+          ? `<b>conflict</b> in ${plural(files.length, 'file')}`
+          : d.status === 'failed'
+            ? '<b>checks failed</b> on the merged result'
+            : 'the landing could not run';
+      return {
+        tone: 'bad',
+        icon: 'warn',
+        html: `${chips(claimsOf, nodes)} could not land: ${why}${
+          files.length ? `<span class="sub mono">${files.slice(0, 3).map(esc).join(', ')}${files.length > 3 ? ` +${files.length - 3}` : ''}</span>` : ''
+        }<span class="sub">It waits for a decision: bring it up to date and finish again, or re-plan.</span>`,
+      };
+    }
+    case 'reality.served': {
+      const line = typeof d.line === 'string' ? d.line : '?';
+      const prev = typeof d.previous === 'string' ? d.previous : null;
+      return {
+        tone: 'land',
+        icon: 'reality',
+        html: `Reality switch: now serving <b>${esc(line)}</b>${prev ? ` <span class="who">(was ${esc(prev)})</span>` : ''}<span class="sub">A pointer change: the previous reality stays, retraceable.</span>`,
       };
     }
     case 'reality.at_risk':
