@@ -1,0 +1,10 @@
+{
+  "name": "tiny-text",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Small text helpers, one function per file",
+  "scripts": {
+    "test": "node --test"
+  }
+}
