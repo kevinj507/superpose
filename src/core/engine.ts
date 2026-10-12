@@ -108,8 +108,16 @@ export class Engine {
 
   addClaim(input: NewClaim): Claim {
     if (!validScope(input.scope)) throw new EngineError('bad_request', 'a scope is 1 to 64 patterns of at most 256 characters');
-    for (const id of input.restsOn ?? []) this.assumption(id);
-    for (const id of input.requires ?? []) this.claimNode(id);
+    for (const id of input.restsOn ?? []) {
+      if (this.assumption(id).status !== 'holding') throw new EngineError('contradicted', `assumption ${id} is contradicted`);
+    }
+    const line = input.line ?? 'main';
+    for (const id of input.requires ?? []) {
+      const dep = this.claimNode(id);
+      if (dep.line !== line && !(this.store.getLine(line)?.inherits ?? []).includes(id)) {
+        throw new EngineError('bad_request', `claim ${id} is on line ${dep.line}; work on ${line} cannot build on it`);
+      }
+    }
     const c: Claim = {
       id: this.store.nextId('c'),
       kind: 'claim',
@@ -140,10 +148,11 @@ export class Engine {
       const statement = (input.statement ?? '').trim();
       if (!statement) throw new EngineError('bad_request', 'an assumption needs a statement');
       const key = normalise(statement);
-      a = this.store
+      // A statement already known to be false is refused, however it is worded.
+      const known = this.store
         .allNodes()
-        .find((n): n is Assumption => n.kind === 'assumption' && n.status === 'holding' && normalise(n.statement) === key);
-      a ??= this.addAssumption(statement);
+        .filter((n): n is Assumption => n.kind === 'assumption' && normalise(n.statement) === key);
+      a = known.find((n) => n.status === 'holding') ?? known[0] ?? this.addAssumption(statement);
     }
     if (a.status !== 'holding') throw new EngineError('contradicted', `assumption ${a.id} is contradicted`);
     this.store.addEdge({ source: a.id, target: id, purpose: 'required for' });
@@ -157,9 +166,7 @@ export class Engine {
       const src = this.store.getNode(e.source);
       if (!src) return false;
       if (src.kind === 'assumption') return src.status === 'holding';
-      if (src.kind === 'claim') {
-        return this.opts.dependencyGate === 'landed' ? src.status === 'landed' : src.status === 'done' || src.status === 'landed';
-      }
+      if (src.kind === 'claim') return this.depMet(c, src);
       return true;
     });
   }
@@ -171,7 +178,7 @@ export class Engine {
     return this.claims().filter(
       (c) =>
         this.isReady(c.id) ||
-        ((c.status === 'claimed' || c.status === 'stale') && (!c.lease || c.lease.expiresAt <= now)),
+        ((c.status === 'claimed' || c.status === 'stale') && (!c.lease || c.lease.expiresAt <= now) && this.dependenciesMet(c.id)),
     );
   }
 
@@ -179,7 +186,7 @@ export class Engine {
 
   // Take a claim. A lapsed lease can be taken over; so can a stale claim whose
   // agent is gone, but it stays stale until its new holder re-plans it.
-  claim(id: string, agent: string): { token: string; expiresAt: number; status: ClaimStatus; revoke?: string } {
+  claim(id: string, agent: string): { token: string; expiresAt: number; status: ClaimStatus; revoke: string[] } {
     const c = this.claimNode(id);
     const now = this.clock.now();
     const free = !c.lease || c.lease.expiresAt <= now;
@@ -188,22 +195,24 @@ export class Engine {
     if (c.line !== 'main' && !this.store.getLine(c.line)) {
       throw new EngineError('no_line', `line ${c.line} does not exist yet; create it before claiming work on it`);
     }
+    // The new holder hears what the previous one had not heard yet (checks
+    // that failed, a landing that conflicted); a claim never held starts now.
     const lease = {
       holder: agent,
       token: this.newToken(),
       expiresAt: now + this.opts.leaseMs,
-      cursor: this.latestSeq(),
+      cursor: c.lease?.cursor ?? c.deliveredSeq ?? this.latestSeq(),
     };
     const status = c.status === 'stale' ? 'stale' : 'claimed';
     if (status === 'stale') {
       // Whoever takes over a stale claim hears why it is stale, at its first
       // renewal, like the agent that held it before.
       const why = this.store.eventsSince(0).filter((e) => e.type === 'claim.stale' && e.claims.includes(id)).at(-1);
-      if (why) lease.cursor = why.seq - 1;
+      if (why) lease.cursor = Math.min(lease.cursor, why.seq - 1);
     }
     this.store.putNode({ ...c, status, lease });
-    // The previous holder's git token, if any, is revoked by the caller.
-    return { token: lease.token, expiresAt: lease.expiresAt, status, revoke: c.lease?.git?.tokenId };
+    // The previous holder's git tokens, if any, are revoked by the caller.
+    return { token: lease.token, expiresAt: lease.expiresAt, status, revoke: tokensOf(c) };
   }
 
   // The claim's repo, made after the lease was granted. The base commit is the
@@ -215,19 +224,21 @@ export class Engine {
     return next;
   }
 
-  // Put a new git token on the lease. Returns the id of the one it replaces,
-  // which the caller revokes.
-  attachGit(id: string, token: string, git: { tokenId: string; expiresAt: number }): string | undefined {
+  // Put a new git token on the lease. The one it replaces is kept on the
+  // lease until it expires, so it is revoked when the lease ends.
+  attachGit(id: string, token: string, git: { tokenId: string; expiresAt: number }): void {
     const c = this.held(id, token);
-    this.store.putNode({ ...c, lease: { ...c.lease!, git } });
-    return c.lease!.git?.tokenId;
+    const now = this.clock.now();
+    const lease = c.lease!;
+    const retired = [...(lease.retired ?? []), ...(lease.git ? [lease.git] : [])].filter((t) => t.expiresAt > now);
+    this.store.putNode({ ...c, lease: { ...lease, git, retired } });
   }
 
-  // Hand a claim back before its lease ends. Returns the git token to revoke.
-  release(id: string, token: string): { revoke?: string } {
+  // Hand a claim back before its lease ends. Returns the git tokens to revoke.
+  release(id: string, token: string): { revoke: string[] } {
     const c = this.held(id, token);
-    this.store.putNode({ ...c, status: c.status === 'stale' ? 'stale' : 'open', lease: undefined });
-    return { revoke: c.lease!.git?.tokenId };
+    this.store.putNode({ ...c, status: this.openOrStale(c), lease: undefined, deliveredSeq: c.lease!.cursor });
+    return { revoke: tokensOf(c) };
   }
 
   // The renewal reply is how a running agent learns the world moved: it
@@ -283,9 +294,12 @@ export class Engine {
       // branch, or out of order) is accepted once the reason no longer holds.
       if (existing.accepted || reason) return existing;
       const { reason: _was, ...rest } = existing;
-      const upgraded: PushRecord = { ...rest, ref: input.ref, accepted: true };
+      // Judged against the scope as it is now: a re-plan may have changed it.
+      const outside = outOfScope(existing.paths, c.scope);
+      const upgraded: PushRecord = { ...rest, ref: input.ref, accepted: true, outside, verdict: verdictFor(outside, existing.checks) };
       this.store.putPush(upgraded);
       this.store.putNode({ ...c, headSha: input.sha, headSeenAt: seenAt, pushes: c.pushes + 1 });
+      this.notifyTouched(c, outside, input.sha);
       return upgraded;
     }
     const outside = outOfScope(input.paths, c.scope);
@@ -366,12 +380,34 @@ export class Engine {
     return this.held(id, token);
   }
 
-  // Finish a claim. Returns the git token to revoke: the work is handed in.
-  finish(id: string, token: string): { revoke?: string } {
+  // Finish a claim. Returns the git tokens to revoke: the work is handed in.
+  // A landing that failed before starts afresh.
+  finish(id: string, token: string): { revoke: string[] } {
     const c = this.held(id, token);
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
-    this.store.putNode({ ...c, status: 'done', lease: undefined, finishedAt: this.clock.now() });
-    return { revoke: c.lease!.git?.tokenId };
+    this.store.putNode({
+      ...c,
+      status: 'done',
+      lease: undefined,
+      finishedAt: this.clock.now(),
+      deliveredSeq: c.lease!.cursor,
+      landing: undefined,
+      rebase: undefined,
+    });
+    return { revoke: tokensOf(c) };
+  }
+
+  // What the agent hands in at finish is what its repo holds: `sha` (already
+  // recorded and accepted), or nothing if the repo is back at its base.
+  handIn(id: string, token: string, sha: string | null, seenAt: number): Claim {
+    const c = this.held(id, token);
+    let next = c;
+    if (!sha || sha === c.baseSha) next = { ...c, headSha: undefined, headSeenAt: seenAt };
+    else if (sha !== c.headSha && this.store.getPush(id, sha)?.accepted && seenAt >= (c.headSeenAt ?? 0)) {
+      next = { ...c, headSha: sha, headSeenAt: seenAt };
+    }
+    if (next !== c) this.store.putNode(next);
+    return next;
   }
 
   // ---- lines and landing ---------------------------------------------------
@@ -486,10 +522,15 @@ export class Engine {
     const line = this.line(lineName);
     const c = this.claimNode(id);
     const current = line.landing?.claim === id && (!landing || line.landing.id === landing);
-    if (!current || c.status !== 'done' || c.landing?.status !== 'landing') return false;
+    if (!current) return false;
     this.store.putLine({ ...line, landing: undefined });
-    if (outcome.status === 'landed') this.markLanded(id, outcome.merge, lineName);
-    else this.failLanding(id, outcome);
+    if (outcome.status === 'landed') {
+      // What git did is recorded whatever happened meanwhile. A claim made
+      // stale while landing is now landed work at risk.
+      const atRisk = c.status === 'stale';
+      this.markLanded(id, outcome.merge, lineName);
+      if (atRisk) this.emit('reality.at_risk', [id], { line: lineName, merge: outcome.merge, landedWhileStale: true });
+    } else if (c.status === 'done' || c.status === 'stale') this.failLanding(id, outcome);
     return true;
   }
 
@@ -499,7 +540,16 @@ export class Engine {
     const c = this.claimNode(id);
     if (c.status !== 'done') throw new EngineError('not_done', `claim ${id} is ${c.status}`);
     if (c.landing?.status === 'landing') throw new EngineError('busy', `claim ${id} is landing right now`);
-    const next: Claim = { ...c, status: 'open', landing: undefined, finishedAt: undefined };
+    // Its next holder brings it up to date with the line: what it changes is
+    // judged from the line's tip from now on.
+    const next: Claim = {
+      ...c,
+      status: this.openOrStale(c),
+      landing: undefined,
+      finishedAt: undefined,
+      baseSha: this.line(c.line).head ?? c.baseSha,
+      rebase: true,
+    };
     this.store.putNode(next);
     return next;
   }
@@ -542,6 +592,7 @@ export class Engine {
       lease: { ...c.lease!, expiresAt: this.clock.now() + this.opts.leaseMs },
     };
     this.store.putNode(next);
+    if (change.scope && next.headSha) this.rejudge(id, next.headSha);
     this.emit('claim.replanned', [id], { version: next.version });
     return next;
   }
@@ -620,7 +671,10 @@ export class Engine {
       const kept: KeptBranch[] = c.headSha
         ? [...c.kept, { sha: c.headSha, reason: `finding ${f.id} verified`, at: now }]
         : c.kept;
-      this.store.putNode({ ...c, status: 'stale', kept });
+      // A landing in flight is left to report back; a failed one is cleared,
+      // so the claim lands afresh once re-planned and finished.
+      const landing = c.landing?.status === 'landing' ? c.landing : undefined;
+      this.store.putNode({ ...c, status: 'stale', kept, landing });
       this.emit('claim.stale', [id], { finding: f.id, statement: f.statement, assumptions: f.targets });
     }
     if (impact.landedAtRisk.length) {
@@ -636,11 +690,13 @@ export class Engine {
     if (f.status !== 'unverified') throw new EngineError('settled', `finding ${f.id} is ${f.status}`);
     this.store.putNode({ ...f, status: 'refuted' });
     const finder = this.claimNode(f.finder);
-    if (finder.status === 'claimed' || finder.status === 'done') {
+    if (finder.status === 'claimed' || finder.status === 'done' || finder.status === 'open') {
       const kept = finder.headSha
         ? [...finder.kept, { sha: finder.headSha, reason: `finding ${f.id} refuted`, at: this.clock.now() }]
         : finder.kept;
-      this.store.putNode({ ...finder, status: 'stale', kept });
+      const landing = finder.landing?.status === 'landing' ? finder.landing : undefined;
+      this.store.putNode({ ...finder, status: 'stale', kept, landing });
+      this.emit('claim.stale', [f.finder], { finding: f.id, statement: f.statement, refuted: true });
     }
     this.emit('finding.refuted', [f.finder], { finding: f.id });
   }
@@ -704,11 +760,42 @@ export class Engine {
 
   // What a claim builds on has landed (or finished, under the 'done' gate).
   private dependenciesMet(id: string): boolean {
+    const c = this.claimNode(id);
     return this.store.edgesTo(id, 'required for').every((e) => {
       const src = this.store.getNode(e.source);
-      if (src?.kind !== 'claim') return true;
-      return this.opts.dependencyGate === 'landed' ? src.status === 'landed' : src.status === 'done' || src.status === 'landed';
+      return src?.kind !== 'claim' || this.depMet(c, src);
     });
+  }
+
+  // One claim's dependency on another is met when the other has landed (or
+  // finished, under the 'done' gate) where this one's fork will see it: on the
+  // same line, or inherited by this line from the one it was forked from.
+  private depMet(c: Claim, dep: Claim): boolean {
+    const finished = this.opts.dependencyGate === 'landed' ? dep.status === 'landed' : dep.status === 'done' || dep.status === 'landed';
+    if (!finished || this.opts.dependencyGate !== 'landed') return finished;
+    return dep.line === c.line || (this.store.getLine(c.line)?.inherits ?? []).includes(dep.id);
+  }
+
+  // A claim handed back is open again, unless it rests on something already
+  // contradicted: then its next holder must re-plan first.
+  private openOrStale(c: Claim): 'open' | 'stale' {
+    if (c.status === 'stale') return 'stale';
+    const contradicted = this.store
+      .edgesTo(c.id, 'required for')
+      .some((e) => {
+        const src = this.store.getNode(e.source);
+        return src?.kind === 'assumption' && src.status !== 'holding';
+      });
+    return contradicted ? 'stale' : 'open';
+  }
+
+  // Judge a recorded commit again against the claim's current scope.
+  private rejudge(id: string, sha: string) {
+    const c = this.claimNode(id);
+    const row = this.store.getPush(id, sha);
+    if (!row) return;
+    const outside = outOfScope(row.paths, c.scope);
+    this.store.putPush({ ...row, outside, verdict: verdictFor(outside, row.checks) });
   }
 
   private realitiesAgainst(affected: string[], landedAtRisk: string[]): RealityImpact[] {
@@ -820,4 +907,29 @@ function pushResult(row: PushRecord): PushResult {
     verdict: row.outside.length ? 'scope-violation' : 'in-scope',
     outside: row.outside,
   };
+}
+
+// Every git token a claim's lease holds: the current one and the ones it
+// replaced at renewals that have not expired yet.
+function tokensOf(c: Claim): string[] {
+  if (!c.lease) return [];
+  return [...(c.lease.git ? [c.lease.git.tokenId] : []), ...(c.lease.retired ?? []).map((t) => t.tokenId)];
+}
+
+// The verdict for a commit, from what it changes outside the scope and what
+// its checks said.
+function verdictFor(outside: string[], checks: CheckRun | undefined): Verdict {
+  if (outside.length) return 'scope-violation';
+  switch (checks?.status) {
+    case 'passed':
+      return 'checks-passed';
+    case 'failed':
+      return 'checks-failed';
+    case 'error':
+      return 'verifier-failed';
+    case 'timeout':
+      return 'budget-exhausted';
+    default:
+      return 'unverified';
+  }
 }

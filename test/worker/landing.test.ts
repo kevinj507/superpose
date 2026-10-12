@@ -114,3 +114,14 @@ describe('deleting a graph', () => {
     expect((await api('POST', `${g}/claims`, ADMIN, { statement: 'again', scope: ['**'] })).data.id).toBe('c1');
   });
 });
+
+describe('local mode', () => {
+  it('a claim finished without reporting its push still lands', async () => {
+    const { gid, g } = await graphWithLine();
+    const a = (await api('POST', `${g}/claims`, ADMIN, { statement: 'x', scope: ['src/x/**'] })).data;
+    const grant = (await api('POST', `${g}/claims/${a.id}/claim`, AGENT, { agent: 'quiet' })).data;
+    await inGraph(gid, (_, h) => h.commit(grant.repo.name, { 'src/x/a.ts': 'x' }, `x\n\nSuperpose-Claim: ${a.id}`));
+    expect((await api('POST', `${g}/claims/${a.id}/finish`, grant.token)).status).toBe(200);
+    expect(node((await api('GET', `${g}/snapshot`)).data, a.id).status).toBe('landed');
+  });
+});

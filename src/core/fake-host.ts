@@ -184,6 +184,13 @@ export class FakeRepoHost implements RepoHost {
     return { merge };
   }
 
+  // Move a repo's head to any commit, as `git push --force` would.
+  setHead(repo: string, sha: string): void {
+    const r = this.repo(repo);
+    if (!r) throw hostError('NOT_FOUND', `no repo ${repo}`);
+    this.kv.put(`repo:${repo}`, { ...r, head: sha });
+  }
+
   head(repo: string): string | undefined {
     return this.repo(repo)?.head;
   }

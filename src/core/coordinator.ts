@@ -29,6 +29,9 @@ export interface ClaimGrant {
   repo: RepoRef; // the claim's own repo, a fork of its line
   baseSha?: string; // the commit the fork started from
   git?: GitAccess; // write access that lives exactly as long as the lease
+  // For a reopened claim: read access to its line, to bring the claim up to
+  // date (merge the line's main, resolve, push) before finishing again.
+  line?: GitAccess & { head?: string };
 }
 
 export interface RenewGrant extends RenewResult {
@@ -80,7 +83,7 @@ export class Coordinator {
     const { revoke, ...lease } = this.tx((e) => e.claim(id, agent));
     try {
       let c = this.tx((e) => e.getClaim(id));
-      if (revoke && c.repo) await this.revokeQuietly(c.repo.name, revoke);
+      if (c.repo) await this.revokeAll(c.repo.name, revoke);
       if (!c.repo) {
         const line = await this.ensureLine(c.line);
         const fork = await this.host.fork(line.name, claimRepoName(this.opts.graph, id));
@@ -89,6 +92,7 @@ export class Coordinator {
       const grant: ClaimGrant = { ...lease, repo: c.repo!, baseSha: c.baseSha };
       // A stale claim gets no write access until it is re-planned.
       if (lease.status !== 'stale') grant.git = await this.grantGit(id, lease.token, lease.expiresAt, c.repo!);
+      if (c.rebase) grant.line = await this.lineRead(c.line, lease.expiresAt);
       return grant;
     } catch (err) {
       await this.handBack(id, lease.token);
@@ -120,20 +124,22 @@ export class Coordinator {
     const c = this.tx((e) => e.checkLease(id, token));
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
     if (c.repo && c.status === 'claimed') {
-      // Write access goes first, so nothing can be pushed after the head is
-      // read: what is handed in is exactly what is in the repo.
-      if (c.lease?.git) await this.revokeQuietly(c.repo.name, c.lease.git.tokenId);
+      // Write access goes first, every token the lease ever held, so nothing
+      // can be pushed after the head is read: what is handed in is exactly
+      // what is in the repo, even if that is less than was pushed before.
+      await this.revokeAll(c.repo.name, [...(c.lease?.git ? [c.lease.git.tokenId] : []), ...(c.lease?.retired ?? []).map((t) => t.tokenId)]);
+      const seenAt = this.opts.now?.() ?? Date.now();
       const head = await this.host.readHead(c.repo.name);
       if (head && head !== c.baseSha) await this.inspectPush(id, { sha: head, ref: 'refs/heads/main', before: null });
+      this.tx((e) => e.handIn(id, token, head, seenAt));
     }
-    const { revoke } = this.tx((e) => e.finish(id, token));
-    if (revoke && c.repo && revoke !== c.lease?.git?.tokenId) await this.revokeQuietly(c.repo.name, revoke);
+    this.tx((e) => e.finish(id, token));
   }
 
   async release(id: string, token: string): Promise<void> {
     const c = this.tx((e) => e.getClaim(id));
     const { revoke } = this.tx((e) => e.release(id, token));
-    if (revoke && c.repo) await this.revokeQuietly(c.repo.name, revoke);
+    if (c.repo) await this.revokeAll(c.repo.name, revoke);
   }
 
   async replan(
@@ -225,10 +231,22 @@ export class Coordinator {
     try {
       const repo = this.tx((e) => e.getClaim(id)).repo;
       const { revoke } = this.tx((e) => e.release(id, leaseToken));
-      if (revoke && repo) await this.revokeQuietly(repo.name, revoke);
+      if (repo) await this.revokeAll(repo.name, revoke);
     } catch {
       // Already released or expired: nothing to hand back.
     }
+  }
+
+  private async revokeAll(repo: string, tokenIds: string[]) {
+    for (const id of tokenIds) await this.revokeQuietly(repo, id);
+  }
+
+  // Read access to a line for as long as the lease lasts.
+  private async lineRead(line: string, leaseEnds: number): Promise<GitAccess & { head?: string }> {
+    const repo = await this.ensureLine(line);
+    const now = this.opts.now?.() ?? Date.now();
+    const t = await this.host.mintToken(repo.name, 'read', Math.max(60, Math.floor((leaseEnds - now) / 1000) - 1));
+    return { remote: repo.remote, token: t.secret, expiresAt: t.expiresAt, head: repo.head };
   }
 
   // Revoking is hygiene, not safety: every token expires with its lease anyway.

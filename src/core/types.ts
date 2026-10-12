@@ -31,6 +31,9 @@ export interface Lease {
   // The git write token that lives exactly as long as this lease. Only its id
   // is kept, so it can be revoked; the secret goes to the agent and nowhere else.
   git?: { tokenId: string; expiresAt: number };
+  // Tokens it replaced at renewals: left to lapse (a push may be in flight),
+  // and revoked with the current one when the lease ends.
+  retired?: { tokenId: string; expiresAt: number }[];
 }
 
 // Getting a finished claim into its line: one at a time per line, in
@@ -94,6 +97,8 @@ export interface Claim {
   headSha?: string;
   headSeenAt?: number; // when the repo was last seen with headSha as its tip
   finishedAt?: number;
+  deliveredSeq?: number; // the last event its previous holder heard, for the next one
+  rebase?: boolean; // reopened: its next holder brings it up to date with the line first
   landing?: LandingState; // set once the claim is in the landing queue
   landedSha?: string; // the merge commit on the line
   status: ClaimStatus;

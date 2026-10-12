@@ -209,7 +209,7 @@ export class Graph extends DurableObject<Env> {
   async finish(graph: string, id: string, token: string) {
     const r = await this.runWithRepos(graph, (c) => c.finish(id, token));
     if (r.ok) {
-      await this.checkHeadIfUnchecked(id);
+      await this.checkHeadIfUnchecked(graph, id);
       await this.pumpLandings(graph);
     }
     return r;
@@ -232,12 +232,14 @@ export class Graph extends DurableObject<Env> {
   }
 
   // A finished claim whose latest commit has no checks recorded would never
-  // land; start them.
-  private async checkHeadIfUnchecked(id: string) {
+  // land; start them (in local mode, record that none run).
+  private async checkHeadIfUnchecked(graph: string, id: string) {
     const c = this.engine.getClaim(id);
     if (!c.headSha || !c.repo) return;
     const row = this.engine.pushRecord(id, c.headSha);
-    if (row && row.accepted && !row.checks) await this.startCheck(c.repo.name, c.headSha);
+    if (!row || !row.accepted || row.checks) return;
+    if (this.repoHost instanceof FakeRepoHost) await this.afterPush(graph, row);
+    else await this.startCheck(c.repo.name, c.headSha);
   }
 
   private async startCheck(repoName: string, sha: string) {
