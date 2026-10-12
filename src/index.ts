@@ -31,6 +31,7 @@ const STATUS: Record<string, number> = {
 type Handler = (ctx: {
   graph: DurableObjectStub<import('./graph').Graph>;
   params: Record<string, string>;
+  query: URLSearchParams;
   body: Record<string, unknown>;
   bearer: string;
 }) => Promise<Result<unknown>>;
@@ -58,6 +59,8 @@ const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => ty
 
 route('GET', '/api/graphs/:gid/snapshot', 'public', ({ graph }) => graph.snapshot());
 route('GET', '/api/graphs/:gid/ready', 'public', ({ graph }) => graph.ready());
+// Why is a file the way it is: GET /api/graphs/<g>/why?path=src/x.ts[&line=main]
+route('GET', '/api/graphs/:gid/why', 'public', ({ graph, query }) => graph.why(query.get('path') ?? '', query.get('line') || undefined));
 route('GET', '/api/graphs/:gid/findings/:fid/impact', 'public', ({ graph, params }) => graph.impactOf(params.fid!));
 
 route('DELETE', '/api/graphs/:gid', 'admin', ({ graph, params }) => graph.destroy(params.gid!));
@@ -223,7 +226,7 @@ export default {
     }
 
     const graph = env.GRAPH.get(env.GRAPH.idFromName(params.gid!));
-    const result = await r.handler({ graph, params, body, bearer });
+    const result = await r.handler({ graph, params, query: url.searchParams, body, bearer });
     if (result.ok) return json(200, result.value ?? null);
     return json(STATUS[result.code] ?? 400, { error: result.code, message: result.message });
   },

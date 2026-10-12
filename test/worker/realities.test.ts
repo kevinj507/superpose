@@ -107,3 +107,19 @@ describe('realities: one decision built two ways', () => {
     expect((await SELF.fetch(`https://superpose.test/served/${w.gid}/a%2F..%2F..%2Fsecret`)).status).toBe(400);
   });
 });
+
+describe('why a file is the way it is', () => {
+  it('names the landed claims that changed it in the served reality, with what they rested on', async () => {
+    const w = await twoWays();
+    const why = (await api('GET', `${w.g}/why?path=index.html`)).data;
+    expect(why).toEqual([
+      expect.objectContaining({
+        claim: w.a.id, line: 'main', statement: 'Counters in KV',
+        assumptions: [expect.objectContaining({ statement: 'KV reads are strongly consistent', status: 'holding' })],
+      }),
+    ]);
+    const other = (await api('GET', `${w.g}/why?path=index.html&line=do`)).data;
+    expect(other.map((e: any) => e.claim)).toEqual([w.b.id]);
+    expect((await api('GET', `${w.g}/why?path=nothing.txt`)).data).toEqual([]);
+  });
+});

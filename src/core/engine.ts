@@ -38,6 +38,17 @@ export interface EngineOptions {
   landingTimeoutMs?: number;
 }
 
+export interface WhyEntry {
+  claim: string;
+  statement: string;
+  line: string;
+  commit: string;
+  merge: string | null;
+  verdict: Verdict;
+  assumptions: { id: string; statement: string; status: string }[];
+  finishedAt: number | null;
+}
+
 export type LandingOutcome =
   | { status: 'landed'; merge: string; log?: string }
   | { status: 'conflict'; files: string[]; log?: string }
@@ -746,6 +757,37 @@ export class Engine {
   }
 
   // ---- reads -----------------------------------------------------------------
+
+  // Why is this file the way it is in a reality? The landed claims that
+  // changed it (on the line, or carried from the line it was forked from),
+  // oldest first: what each one set out to make true, what it rested on, the
+  // verdict on the commit that landed, and the merge that brought it in.
+  why(path: string, lineName?: string): WhyEntry[] {
+    const line = lineName ? this.line(lineName) : this.store.lines().find((l) => l.served) ?? this.line('main');
+    const inherited = new Set(line.inherits ?? []);
+    const out: WhyEntry[] = [];
+    for (const c of this.claims()) {
+      if (c.status !== 'landed' || !c.headSha || !(c.line === line.name || inherited.has(c.id))) continue;
+      const row = this.store.getPush(c.id, c.headSha);
+      if (!row?.paths.includes(path)) continue;
+      const assumptions = this.store
+        .edgesTo(c.id, 'required for')
+        .map((e) => this.store.getNode(e.source))
+        .filter((n): n is Assumption => n?.kind === 'assumption')
+        .map((a) => ({ id: a.id, statement: a.statement, status: a.status }));
+      out.push({
+        claim: c.id,
+        statement: c.statement,
+        line: c.line,
+        commit: c.headSha,
+        merge: c.landedSha ?? null,
+        verdict: row.verdict,
+        assumptions,
+        finishedAt: c.finishedAt ?? null,
+      });
+    }
+    return out.sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0));
+  }
 
   claims(): Claim[] {
     return this.store.allNodes().filter((n): n is Claim => n.kind === 'claim');

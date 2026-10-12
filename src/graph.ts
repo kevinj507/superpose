@@ -109,6 +109,10 @@ export class Graph extends DurableObject<Env> {
     });
   }
 
+  why(path: string, line?: string) {
+    return this.run((e) => e.why(path, line));
+  }
+
   serve(line: string) {
     return this.run((e) => e.serve(line));
   }
