@@ -178,6 +178,9 @@ async function served(env: Env, gid: string, rest: string): Promise<Response> {
       'content-type': TYPES[ext] ?? 'text/plain; charset=utf-8',
       'cache-control': 'no-store',
       'content-security-policy': 'sandbox allow-scripts allow-forms allow-popups',
+      // The sandbox gives the page an opaque origin, so its own module scripts
+      // load as cross-origin requests and need this.
+      'access-control-allow-origin': '*',
     },
   });
 }
