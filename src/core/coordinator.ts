@@ -147,7 +147,14 @@ export class Coordinator {
     const c = this.tx((e) => e.getClaim(id));
     if (!c.repo) throw new EngineError('no_repo', `claim ${id} has no repo yet`);
     const known = this.tx((e) => e.pushRecord(id, push.sha));
-    if (known) return known;
+    if (known?.accepted) return known;
+    if (known) {
+      // Seen before but refused: judge it again as it stands now.
+      const head = await this.host.readHead(c.repo.name);
+      return this.tx((e) =>
+        e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths: known.paths, isHead: head === push.sha }),
+      );
+    }
     let paths: string[];
     let head: string | null;
     try {

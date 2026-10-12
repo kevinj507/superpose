@@ -257,14 +257,19 @@ export class Engine {
     input: { sha: string; ref: string; before: string | null; paths: string[]; isHead: boolean; unattributed?: string[] },
   ): PushRecord {
     const c = this.claimNode(id);
+    const reason = this.rejection(c, input);
     const existing = this.store.getPush(id, input.sha);
-    if (existing) return existing;
+    if (existing) {
+      // A commit refused before (pushed while stale, first seen on another
+      // branch, or out of order) is accepted once the reason no longer holds.
+      if (existing.accepted || reason) return existing;
+      const { reason: _was, ...rest } = existing;
+      const upgraded: PushRecord = { ...rest, ref: input.ref, accepted: true };
+      this.store.putPush(upgraded);
+      this.store.putNode({ ...c, headSha: input.sha, pushes: c.pushes + 1 });
+      return upgraded;
+    }
     const outside = outOfScope(input.paths, c.scope);
-    let reason: PushRecord['reason'];
-    if (input.ref !== MAIN) reason = 'other-branch';
-    else if (c.status === 'stale') reason = 'stale';
-    else if (c.status !== 'claimed') reason = 'not-claimed';
-    else if (!input.isHead) reason = 'not-head';
     const row: PushRecord = {
       claim: id,
       sha: input.sha,
@@ -637,6 +642,14 @@ export class Engine {
   }
 
   // ---- internals ---------------------------------------------------------------
+
+  private rejection(c: Claim, input: { ref: string; isHead: boolean }): PushRecord['reason'] {
+    if (input.ref !== MAIN) return 'other-branch';
+    if (c.status === 'stale') return 'stale';
+    if (c.status !== 'claimed') return 'not-claimed';
+    if (!input.isHead) return 'not-head';
+    return undefined;
+  }
 
   private realitiesAgainst(affected: string[], landedAtRisk: string[]): RealityImpact[] {
     const lines = new Map(this.store.lines().map((l) => [l.name, l]));

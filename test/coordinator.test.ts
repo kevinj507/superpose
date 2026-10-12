@@ -209,3 +209,32 @@ describe('finishing hands in what is in the repo', () => {
     expect(await w.coord.inspectPush(w.claim.id, { sha: after, ref: 'refs/heads/main', before: null })).toMatchObject({ accepted: true });
   });
 });
+
+describe('a refused commit is judged again when it comes up again', () => {
+  it('work pushed while stale and still the head after re-planning is what finishing hands in', async () => {
+    const w = await seeded();
+    const A = w.engine.addAssumption('counters can live in KV');
+    const B = w.engine.addAssumption('counters live in a Durable Object');
+    const onA = w.engine.addClaim({ statement: 'count requests', scope: ['src/rate/**'], restsOn: [A.id] });
+    const finder = w.engine.addClaim({ statement: 'watch', scope: ['notes/**'] });
+    const f = await w.coord.claim(finder.id, 'finder');
+    const g = await w.coord.claim(onA.id, 'agent');
+    const { finding } = w.engine.fileFinding(finder.id, f.token, { statement: 'KV is eventually consistent', effect: 'contradicts', targets: [A.id] });
+    w.engine.verifyFinding(finding.id);
+    const late = w.host.commit(g.repo.name, { 'src/rate/limit.ts': 'durable object counters' }, `x\n\nSuperpose-Claim: ${onA.id}`).after;
+    expect(await w.coord.inspectPush(onA.id, { sha: late, ref: 'refs/heads/main', before: null })).toMatchObject({ accepted: false, reason: 'stale' });
+    await w.coord.replan(onA.id, g.token, { restsOn: [B.id] });
+    await w.coord.finish(onA.id, g.token);
+    expect(w.engine.getClaim(onA.id)).toMatchObject({ status: 'done', headSha: late });
+    expect(w.engine.pushRecord(onA.id, late)).toMatchObject({ accepted: true });
+  });
+
+  it('a commit first pushed to a side branch counts once it reaches main', async () => {
+    const w = await seeded();
+    const g = await w.coord.claim(w.claim.id, 'agent');
+    const sha = w.host.commit(g.repo.name, { 'src/rate/limit.ts': 'v1' }).after;
+    expect(await w.coord.inspectPush(w.claim.id, { sha, ref: 'refs/heads/wip', before: null })).toMatchObject({ accepted: false, reason: 'other-branch' });
+    expect(await w.coord.inspectPush(w.claim.id, { sha, ref: 'refs/heads/main', before: null })).toMatchObject({ accepted: true, ref: 'refs/heads/main' });
+    expect(w.engine.getClaim(w.claim.id).headSha).toBe(sha);
+  });
+});
