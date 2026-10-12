@@ -59,6 +59,10 @@ export class Coordinator {
 
   // Fork a line into a new one: another option of a decision, built side by side.
   async createLine(input: { name: string; from: string; decision?: string; option?: string }) {
+    this.tx((e) => {
+      if (e.lines().some((l) => l.name === input.name)) throw new EngineError('exists', `line ${input.name} exists`);
+      if (e.line(input.from).landing) throw new EngineError('busy', `a landing is in progress on ${input.from}; try again in a moment`);
+    });
     const source = await this.ensureLine(input.from);
     if (!source.head) throw new EngineError('empty_line', `line ${input.from} has no commits to fork`);
     const fork = await this.host.fork(source.name, lineRepoName(this.opts.graph, input.name));
@@ -113,12 +117,16 @@ export class Coordinator {
   // the agent finished still counts.
   async finish(id: string, token: string): Promise<void> {
     const c = this.tx((e) => e.checkLease(id, token));
+    if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
     if (c.repo && c.status === 'claimed') {
+      // Write access goes first, so nothing can be pushed after the head is
+      // read: what is handed in is exactly what is in the repo.
+      if (c.lease?.git) await this.revokeQuietly(c.repo.name, c.lease.git.tokenId);
       const head = await this.host.readHead(c.repo.name);
       if (head && head !== c.baseSha) await this.inspectPush(id, { sha: head, ref: 'refs/heads/main', before: null });
     }
     const { revoke } = this.tx((e) => e.finish(id, token));
-    if (revoke && c.repo) await this.revokeQuietly(c.repo.name, revoke);
+    if (revoke && c.repo && revoke !== c.lease?.git?.tokenId) await this.revokeQuietly(c.repo.name, revoke);
   }
 
   async release(id: string, token: string): Promise<void> {
@@ -144,15 +152,21 @@ export class Coordinator {
   // Check a push against the claim's declared scope. The platform reads the
   // commit from the repo itself: what changed is never taken from the agent.
   async inspectPush(id: string, push: PushReport): Promise<PushRecord> {
+    if (!/^[0-9a-f]{40}$/.test(push.sha) || /^0{40}$/.test(push.sha)) {
+      throw new EngineError('bad_request', `not a commit id: ${push.sha.slice(0, 64)}`);
+    }
     const c = this.tx((e) => e.getClaim(id));
     if (!c.repo) throw new EngineError('no_repo', `claim ${id} has no repo yet`);
     const known = this.tx((e) => e.pushRecord(id, push.sha));
     if (known?.accepted) return known;
+    // When the repo is read, so that of two inspections in flight the later
+    // read decides the head.
+    const seenAt = this.opts.now?.() ?? Date.now();
     if (known) {
       // Seen before but refused: judge it again as it stands now.
       const head = await this.host.readHead(c.repo.name);
       return this.tx((e) =>
-        e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths: known.paths, isHead: head === push.sha }),
+        e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths: known.paths, isHead: head === push.sha, seenAt }),
       );
     }
     let paths: string[];
@@ -168,7 +182,7 @@ export class Coordinator {
     }
     const unattributed = (push.commits ?? []).filter((m) => !trailerClaims(m.message).includes(id)).map((m) => m.id);
     return this.tx((e) =>
-      e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths, isHead: head === push.sha, unattributed }),
+      e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths, isHead: head === push.sha, seenAt, unattributed }),
     );
   }
 

@@ -38,6 +38,7 @@ export interface Lease {
 export interface LandingState {
   status: 'queued' | 'landing' | 'conflict' | 'failed' | 'error';
   at: number;
+  attempts?: number; // platform errors are retried, up to three attempts
   log?: string;
   files?: string[]; // the conflicting files, for a conflict
 }
@@ -49,7 +50,7 @@ export interface Line {
   repo?: RepoRef;
   head?: string; // the last landed merge commit
   served: boolean;
-  landing?: { claim: string; sha: string; startedAt: number };
+  landing?: { id: string; claim: string; sha: string; startedAt: number };
   // Where this line came from: the line it was forked from, and the landed
   // claims whose work it carries from there. A finding against any of them
   // puts this reality at risk too.
@@ -91,6 +92,7 @@ export interface Claim {
   repo?: RepoRef; // the claim's own fork of its line, made when first claimed
   baseSha?: string;
   headSha?: string;
+  headSeenAt?: number; // when the repo was last seen with headSha as its tip
   finishedAt?: number;
   landing?: LandingState; // set once the claim is in the landing queue
   landedSha?: string; // the merge commit on the line

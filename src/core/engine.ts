@@ -1,4 +1,4 @@
-import { inScope, outOfScope } from './scope';
+import { inScope, outOfScope, validScope } from './scope';
 import type { Store } from './store';
 import type {
   Assumption,
@@ -107,6 +107,7 @@ export class Engine {
   }
 
   addClaim(input: NewClaim): Claim {
+    if (!validScope(input.scope)) throw new EngineError('bad_request', 'a scope is 1 to 64 patterns of at most 256 characters');
     for (const id of input.restsOn ?? []) this.assumption(id);
     for (const id of input.requires ?? []) this.claimNode(id);
     const c: Claim = {
@@ -182,8 +183,11 @@ export class Engine {
     const c = this.claimNode(id);
     const now = this.clock.now();
     const free = !c.lease || c.lease.expiresAt <= now;
-    const takeover = free && (c.status === 'claimed' || c.status === 'stale');
+    const takeover = free && (c.status === 'claimed' || c.status === 'stale') && this.dependenciesMet(id);
     if (!this.isReady(id) && !takeover) throw new EngineError('not_ready', `claim ${id} is not ready`);
+    if (c.line !== 'main' && !this.store.getLine(c.line)) {
+      throw new EngineError('no_line', `line ${c.line} does not exist yet; create it before claiming work on it`);
+    }
     const lease = {
       holder: agent,
       token: this.newToken(),
@@ -254,10 +258,19 @@ export class Engine {
   // (the push event and the agent's own report) changes nothing.
   recordPush(
     id: string,
-    input: { sha: string; ref: string; before: string | null; paths: string[]; isHead: boolean; unattributed?: string[] },
+    input: {
+      sha: string;
+      ref: string;
+      before: string | null;
+      paths: string[];
+      isHead: boolean;
+      seenAt?: number; // when the repo was read and found with this commit as its tip
+      unattributed?: string[];
+    },
   ): PushRecord {
     const c = this.claimNode(id);
-    const reason = this.rejection(c, input);
+    const seenAt = input.seenAt ?? this.clock.now();
+    const reason = this.rejection(c, { ...input, seenAt });
     const existing = this.store.getPush(id, input.sha);
     if (existing) {
       // A commit refused before (pushed while stale, first seen on another
@@ -266,7 +279,7 @@ export class Engine {
       const { reason: _was, ...rest } = existing;
       const upgraded: PushRecord = { ...rest, ref: input.ref, accepted: true };
       this.store.putPush(upgraded);
-      this.store.putNode({ ...c, headSha: input.sha, pushes: c.pushes + 1 });
+      this.store.putNode({ ...c, headSha: input.sha, headSeenAt: seenAt, pushes: c.pushes + 1 });
       return upgraded;
     }
     const outside = outOfScope(input.paths, c.scope);
@@ -284,7 +297,7 @@ export class Engine {
     if (reason) row.reason = reason;
     if (input.unattributed?.length) row.unattributed = [...input.unattributed];
     this.store.putPush(row);
-    if (row.accepted) this.store.putNode({ ...c, headSha: input.sha, pushes: c.pushes + 1 });
+    if (row.accepted) this.store.putNode({ ...c, headSha: input.sha, headSeenAt: seenAt, pushes: c.pushes + 1 });
     this.notifyTouched(c, outside, input.sha);
     return row;
   }
@@ -309,6 +322,19 @@ export class Engine {
       this.emit('claim.checked', [id], { sha, verdict, exitCode: check.exitCode });
     }
     return next;
+  }
+
+  // Start checks on a commit unless a run is already going (two flows for
+  // the same commit: the push event and a re-check, say). A run silent for
+  // longer than `staleAfterMs` is taken over.
+  beginCheck(id: string, sha: string, command: string, staleAfterMs = 45 * 60_000): boolean {
+    const row = this.store.getPush(id, sha);
+    if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
+    const now = this.clock.now();
+    if (row.checks?.status === 'running' && now - row.checks.startedAt < staleAfterMs) return false;
+    if (row.checks && row.checks.status !== 'running') return false;
+    this.store.putPush({ ...row, checks: { status: 'running', command, startedAt: now } });
+    return true;
   }
 
   // Forget the check result on one commit so it can be checked again.
@@ -349,6 +375,7 @@ export class Engine {
   addLine(input: { name: string; from: string; repo: RepoRef; head?: string; decision?: string; option?: string }): Line {
     if (this.store.getLine(input.name)) throw new EngineError('exists', `line ${input.name} exists`);
     const source = this.line(input.from);
+    if (source.landing) throw new EngineError('busy', `a landing is in progress on ${input.from}; try again in a moment`);
     const carried = this.claims().filter((c) => c.line === input.from && c.status === 'landed').map((c) => c.id);
     const line: Line = {
       name: input.name,
@@ -403,7 +430,8 @@ export class Engine {
   landable(id: string): boolean {
     const c = this.claimNode(id);
     if (c.status !== 'done') return false;
-    if (c.landing && c.landing.status !== 'queued') return false;
+    const retryable = c.landing?.status === 'error' && (c.landing.attempts ?? 1) < 3;
+    if (c.landing && c.landing.status !== 'queued' && !retryable) return false;
     if (c.headSha) {
       const row = this.store.getPush(id, c.headSha);
       const passing = row?.verdict === 'checks-passed' || (row?.verdict === 'unverified' && row.checks?.status === 'skipped');
@@ -417,13 +445,14 @@ export class Engine {
 
   // The single writer's next move on a line: the oldest finished claim that
   // can land, if no landing is in flight. A claim with no commits lands as is.
-  beginNextLanding(lineName: string): { claim: string; sha: string } | null {
+  beginNextLanding(lineName: string): { claim: string; sha: string; landing: string } | null {
     const now = this.clock.now();
     let line = this.line(lineName);
     if (line.landing) {
       const timeout = this.opts.landingTimeoutMs ?? 30 * 60_000;
       if (now - line.landing.startedAt < timeout) return null;
       this.failLanding(line.landing.claim, { status: 'error', log: 'the landing never reported back' });
+      // A late report from that landing is ignored: it no longer matches.
       line = { ...line, landing: undefined };
       this.store.putLine(line);
     }
@@ -436,17 +465,26 @@ export class Engine {
         this.markLanded(next.id, undefined, lineName);
         continue;
       }
-      this.store.putNode({ ...next, landing: { status: 'landing', at: now } });
-      this.store.putLine({ ...line, landing: { claim: next.id, sha: next.headSha, startedAt: now } });
-      return { claim: next.id, sha: next.headSha };
+      const attempts = next.landing?.status === 'error' ? next.landing.attempts ?? 1 : 0;
+      const landing = `${next.id}-${now}-${attempts + 1}`;
+      this.store.putNode({ ...next, landing: { status: 'landing', at: now, attempts } });
+      this.store.putLine({ ...line, landing: { id: landing, claim: next.id, sha: next.headSha, startedAt: now } });
+      return { claim: next.id, sha: next.headSha, landing };
     }
   }
 
-  completeLanding(lineName: string, id: string, outcome: LandingOutcome): void {
+  // Apply a landing's outcome, if it is the landing the line is waiting for.
+  // A late or repeated report (from a landing given up on, or a retried
+  // step) changes nothing. Returns whether it was applied.
+  completeLanding(lineName: string, id: string, outcome: LandingOutcome, landing?: string): boolean {
     const line = this.line(lineName);
-    if (line.landing?.claim === id) this.store.putLine({ ...line, landing: undefined });
+    const c = this.claimNode(id);
+    const current = line.landing?.claim === id && (!landing || line.landing.id === landing);
+    if (!current || c.status !== 'done' || c.landing?.status !== 'landing') return false;
+    this.store.putLine({ ...line, landing: undefined });
     if (outcome.status === 'landed') this.markLanded(id, outcome.merge, lineName);
     else this.failLanding(id, outcome);
+    return true;
   }
 
   // A claim whose landing failed goes back to the ready set, keeping its repo,
@@ -454,6 +492,7 @@ export class Engine {
   reopen(id: string): Claim {
     const c = this.claimNode(id);
     if (c.status !== 'done') throw new EngineError('not_done', `claim ${id} is ${c.status}`);
+    if (c.landing?.status === 'landing') throw new EngineError('busy', `claim ${id} is landing right now`);
     const next: Claim = { ...c, status: 'open', landing: undefined, finishedAt: undefined };
     this.store.putNode(next);
     return next;
@@ -475,6 +514,10 @@ export class Engine {
     change: { statement?: string; scope?: string[]; restsOn: string[] },
   ): Claim {
     const c = this.held(id, token);
+    // Re-planning is how a stale claim gets back to work. A claim that is not
+    // stale keeps the scope and assumptions it was frozen with.
+    if (c.status !== 'stale') throw new EngineError('not_stale', `claim ${id} is not stale; only a stale claim re-plans`);
+    if (change.scope && !validScope(change.scope)) throw new EngineError('bad_request', 'a scope is 1 to 64 patterns of at most 256 characters');
     for (const a of change.restsOn) {
       if (this.assumption(a).status !== 'holding') {
         throw new EngineError('contradicted', `assumption ${a} is contradicted`);
@@ -643,12 +686,23 @@ export class Engine {
 
   // ---- internals ---------------------------------------------------------------
 
-  private rejection(c: Claim, input: { ref: string; isHead: boolean }): PushRecord['reason'] {
+  private rejection(c: Claim, input: { ref: string; isHead: boolean; seenAt: number }): PushRecord['reason'] {
     if (input.ref !== MAIN) return 'other-branch';
     if (c.status === 'stale') return 'stale';
     if (c.status !== 'claimed') return 'not-claimed';
-    if (!input.isHead) return 'not-head';
+    // Two inspections in flight: the one that read the repo later wins, so
+    // the head never moves back to an older commit.
+    if (!input.isHead || input.seenAt < (c.headSeenAt ?? 0)) return 'not-head';
     return undefined;
+  }
+
+  // What a claim builds on has landed (or finished, under the 'done' gate).
+  private dependenciesMet(id: string): boolean {
+    return this.store.edgesTo(id, 'required for').every((e) => {
+      const src = this.store.getNode(e.source);
+      if (src?.kind !== 'claim') return true;
+      return this.opts.dependencyGate === 'landed' ? src.status === 'landed' : src.status === 'done' || src.status === 'landed';
+    });
   }
 
   private realitiesAgainst(affected: string[], landedAtRisk: string[]): RealityImpact[] {
@@ -672,6 +726,7 @@ export class Engine {
   private failLanding(id: string, outcome: Exclude<LandingOutcome, { status: 'landed' }>) {
     const c = this.claimNode(id);
     const landing: LandingState = { status: outcome.status, at: this.clock.now() };
+    if (outcome.status === 'error') landing.attempts = (c.landing?.attempts ?? 0) + 1;
     if (outcome.log) landing.log = outcome.log;
     if (outcome.status === 'conflict') landing.files = outcome.files;
     this.store.putNode({ ...c, landing });

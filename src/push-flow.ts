@@ -60,15 +60,22 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       );
       return handled;
     }
-    await step.do('mark the checks running', () => recordCheck({ status: 'running', command: config.check, startedAt: Date.now() }));
+    // Only one run per commit: another flow for the same commit (a re-check,
+    // or the platform's own check at finish) leaves it to this one.
+    const mine = await step.do('start the checks, unless already running', async () => {
+      const r = await stub.beginCheck(claim, record.sha, config.check);
+      return r.ok && r.value;
+    });
+    if (!mine) return { ...handled, skipped: 'checks already running for this commit' };
     let run: CheckRun;
     try {
       run = await step.do(
         'run the checks on the exact commit',
-        { retries: { limit: 2, delay: '30 seconds', backoff: 'linear' }, timeout: '25 minutes' },
+        { retries: { limit: 2, delay: '30 seconds', backoff: 'linear' }, timeout: `${config.timeoutSeconds * 2 + 300} seconds` },
         async (): Promise<CheckRun> => {
+          // A container of its own for this run.
           const exec = (job: ExecJob) =>
-            this.env.CHECKER.get(this.env.CHECKER.idFromName(`check:${graph}:${claim}:${record.sha}`)).run(job);
+            this.env.CHECKER.get(this.env.CHECKER.idFromName(`check:${graph}:${claim}:${record.sha}:${event.instanceId}`)).run(job);
           const result = await runCheck(host, exec, repo, record.sha, config);
           // The platform failing (no container, no fetch) is retried; the
           // code failing is a verdict.

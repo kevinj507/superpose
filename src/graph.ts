@@ -156,10 +156,14 @@ export class Graph extends DurableObject<Env> {
     });
   }
 
-  async completeLanding(graph: string, line: string, claim: string, outcome: LandingOutcome) {
-    const r = this.run((e) => e.completeLanding(line, claim, outcome));
+  async completeLanding(graph: string, line: string, claim: string, outcome: LandingOutcome, landing?: string) {
+    const r = this.run((e) => e.completeLanding(line, claim, outcome, landing));
     await this.pumpLandings(graph);
     return r;
+  }
+
+  beginCheck(id: string, sha: string, command: string) {
+    return this.run((e) => e.beginCheck(id, sha, command));
   }
 
   // Start the next landing on every line that has none in flight.
@@ -169,20 +173,20 @@ export class Graph extends DurableObject<Env> {
       for (;;) {
         const next = this.run((e) => e.beginNextLanding(line));
         if (!next.ok || !next.value) break;
-        const { claim, sha } = next.value;
+        const { claim, sha, landing } = next.value;
         if (this.repoHost instanceof FakeRepoHost) {
           // Local mode: a three-way merge in memory, no container, no checks.
           const statement = this.engine.getClaim(claim).statement;
           const merged = this.repoHost.merge(lineRepoName(graph, line), sha, landingMessage(claim, statement));
           const outcome: LandingOutcome =
             'merge' in merged ? { status: 'landed', merge: merged.merge } : { status: 'conflict', files: merged.conflict };
-          this.run((e) => e.completeLanding(line, claim, outcome));
+          this.run((e) => e.completeLanding(line, claim, outcome, landing));
           continue;
         }
         try {
-          await this.env.LANDINGS!.create({ params: { graph, line, claim, sha } });
+          await this.env.LANDINGS!.create({ params: { graph, line, claim, sha, landing } });
         } catch (err) {
-          this.run((e) => e.completeLanding(line, claim, { status: 'error', log: `could not start the landing: ${String(err)}` }));
+          this.run((e) => e.completeLanding(line, claim, { status: 'error', log: `could not start the landing: ${String(err)}` }, landing));
           continue;
         }
         break;

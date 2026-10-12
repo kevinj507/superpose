@@ -160,7 +160,12 @@ const TYPES: Record<string, string> = {
 // what visitors get at once. Text files only. Agents wrote this code, so it
 // runs sandboxed in its own origin, away from anything of Superpose's.
 async function served(env: Env, gid: string, rest: string): Promise<Response> {
-  let path = decodeURIComponent(rest.replace(/^\/+/, ''));
+  let path: string;
+  try {
+    path = decodeURIComponent(rest.replace(/^\/+/, ''));
+  } catch {
+    return new Response('bad path', { status: 400 });
+  }
   if (!path || path.endsWith('/')) path += 'index.html';
   if (path.split('/').some((seg) => seg === '..' || seg === '.')) return new Response('bad path', { status: 400 });
   const graph = env.GRAPH.get(env.GRAPH.idFromName(gid));

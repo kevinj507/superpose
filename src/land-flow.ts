@@ -10,6 +10,7 @@ export interface LandParams {
   line: string;
   claim: string;
   sha: string;
+  landing: string; // which landing this is; a late report from an older one is ignored
 }
 
 // One landing: the graph's Durable Object (the single writer) picks the next
@@ -19,11 +20,11 @@ export interface LandParams {
 // starts the next landing on the line.
 export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
   async run(event: WorkflowEvent<LandParams>, step: WorkflowStep) {
-    const { graph, line, claim, sha } = event.payload;
+    const { graph, line, claim, sha, landing } = event.payload;
     const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(graph));
     const host = new ArtifactsHost(this.env.ARTIFACTS!);
     const container = (phase: string) => (job: ExecJob) =>
-      this.env.CHECKER.get(this.env.CHECKER.idFromName(`land:${graph}:${line}:${claim}:${sha}:${phase}`)).run(job);
+      this.env.CHECKER.get(this.env.CHECKER.idFromName(`land:${graph}:${landing}:${phase}`)).run(job);
     const retry = { retries: { limit: 2, delay: '20 seconds' as const, backoff: 'linear' as const }, timeout: '20 minutes' as const };
 
     const outcome = await (async (): Promise<LandingOutcome> => {
@@ -44,8 +45,10 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
       const config = await step.do('read the checks from the merged result', () => readCheckConfig(host, ctx.line.name, merged.merge));
       if (config) {
         let run: CheckRun;
+        // Room for the setup and the check, each bounded by the timebox.
+        const budget = { ...retry, timeout: `${config.timeoutSeconds * 2 + 300} seconds` as const };
         try {
-          run = await step.do('run the checks on the merged result', retry, async () => {
+          run = await step.do('run the checks on the merged result', budget, async () => {
             const result = await checkMerged(host, container('check'), ctx.line, merged.merge, config);
             if (result.status === 'error') throw new Error(`the check could not run: ${result.log ?? ''}`.slice(0, 500));
             return result;
@@ -64,7 +67,7 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
     })().catch((err): LandingOutcome => ({ status: 'error', log: String(err).slice(0, 2000) }));
 
     await step.do('record the landing', async () => {
-      const r = await stub.completeLanding(graph, line, claim, outcome);
+      const r = await stub.completeLanding(graph, line, claim, outcome, landing);
       return r.ok;
     });
     return outcome.status;

@@ -27,9 +27,10 @@ describe('the landing queue', () => {
     const w = setup();
     const a = w.done('a');
     w.done('b');
-    expect(w.engine.beginNextLanding('main')).toEqual({ claim: a, sha: `sha-${a}` });
+    const first = w.engine.beginNextLanding('main');
+    expect(first).toMatchObject({ claim: a, sha: `sha-${a}` });
     expect(w.engine.beginNextLanding('main')).toBeNull();
-    w.engine.completeLanding('main', a, { status: 'landed', merge: 'm1' });
+    w.engine.completeLanding('main', a, { status: 'landed', merge: 'm1' }, first!.landing);
     expect(w.engine.beginNextLanding('main')?.claim).toBe('c2');
     expect(w.engine.line('main')).toMatchObject({ head: 'm1', served: true });
   });
@@ -48,14 +49,34 @@ describe('the landing queue', () => {
     expect(w.engine.isReady(d.id)).toBe(true);
   });
 
-  it('a landing that never reports back is given up on, and the queue moves on', () => {
+  it('a landing that never reports back is given up on and retried, and its late report is ignored', () => {
+    const w = setup();
+    const a = w.done('a');
+    w.done('b');
+    const abandoned = w.engine.beginNextLanding('main')!;
+    w.clock.t += 600_001;
+    const retry = w.engine.beginNextLanding('main')!;
+    expect(retry).toMatchObject({ claim: a });
+    expect(retry.landing).not.toBe(abandoned.landing);
+    expect(w.engine.completeLanding('main', a, { status: 'landed', merge: 'late' }, abandoned.landing)).toBe(false);
+    expect(w.engine.completeLanding('main', a, { status: 'landed', merge: 'm1' }, retry.landing)).toBe(true);
+    expect(w.engine.getClaim(a)).toMatchObject({ status: 'landed', landedSha: 'm1' });
+  });
+
+  it('platform errors are retried up to three attempts; conflicts are not', () => {
     const w = setup();
     const a = w.done('a');
     const b = w.done('b');
-    w.engine.beginNextLanding('main');
-    w.clock.t += 600_001;
-    expect(w.engine.beginNextLanding('main')).toEqual({ claim: b, sha: `sha-${b}` });
-    expect(w.engine.getClaim(a).landing).toMatchObject({ status: 'error' });
+    for (let i = 0; i < 3; i++) {
+      const l = w.engine.beginNextLanding('main')!;
+      expect(l.claim).toBe(a);
+      w.engine.completeLanding('main', a, { status: 'error', log: 'no container' }, l.landing);
+    }
+    const next = w.engine.beginNextLanding('main')!;
+    expect(next.claim).toBe(b);
+    w.engine.completeLanding('main', b, { status: 'conflict', files: ['x'] }, next.landing);
+    expect(w.engine.beginNextLanding('main')).toBeNull();
+    expect(w.engine.getClaim(a).landing).toMatchObject({ status: 'error', attempts: 3 });
   });
 });
 

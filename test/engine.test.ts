@@ -233,6 +233,9 @@ describe('races', () => {
     const Z = w.engine.addAssumption('cache is per-request');
     const only = w.engine.addClaim({ statement: 'z', scope: ['src/z/**'], restsOn: [Z.id] });
     const tok = w.engine.claim(only.id, 'agent-z').token;
+    // A first finding against Z makes the claim stale; it re-plans onto B.
+    const first = w.engine.fileFinding(w.finder, t(w.finder), { statement: 'cache is shared', effect: 'contradicts', targets: [Z.id] }).finding;
+    w.engine.verifyFinding(first.id);
     w.engine.replan(only.id, tok, { restsOn: [w.B.id] });
     const f = w.engine.fileFinding(w.finder, t(w.finder), { statement: 'cache leaks', effect: 'contradicts', targets: [Z.id] }).finding;
     expect(w.engine.verifyFinding(f.id).affected).toEqual([]);

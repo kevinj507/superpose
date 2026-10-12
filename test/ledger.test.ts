@@ -77,3 +77,56 @@ describe('the ready set', () => {
     expect(w.engine.claim(w.id, 'second agent').status).toBe('claimed');
   });
 });
+
+describe('scope matching', () => {
+  it('handles the usual patterns, and pathological ones in no time', async () => {
+    const { inScope } = await import('../src/core/scope');
+    expect(inScope('src/a/b/c.ts', ['src/**'])).toBe(true);
+    expect(inScope('src/a.ts', ['src/**/a.ts'])).toBe(true);
+    expect(inScope('src/x/y/a.ts', ['src/**/a.ts'])).toBe(true);
+    expect(inScope('src/x/a.ts', ['src/*.ts'])).toBe(false);
+    expect(inScope('src/mul.test.js', ['src/mul*'])).toBe(true);
+    expect(inScope('README.md', ['**'])).toBe(true);
+    const started = Date.now();
+    const evil = Array.from({ length: 40 }, () => '**').join('/') + '/x';
+    const longPath = Array.from({ length: 200 }, (_, i) => `d${i}`).join('/') + '/y';
+    expect(inScope(longPath, [evil, '*a*a*a*a*a*a*a*a*a*a*a*a*b'])).toBe(false);
+    expect(inScope('a'.repeat(5000), ['*a*a*a*a*a*a*a*a*a*a*a*a*b'])).toBe(false);
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+});
+
+describe('scope matching, edges', () => {
+  it('a trailing ** is everything inside, not the directory name itself', async () => {
+    const { inScope } = await import('../src/core/scope');
+    expect(inScope('src', ['src/**'])).toBe(false);
+    expect(inScope('src/a', ['src/**'])).toBe(true);
+    expect(inScope('a/b', ['**/b'])).toBe(true);
+    expect(inScope('b', ['**/b'])).toBe(true);
+  });
+});
+
+describe('checks start once per commit', () => {
+  it('a second flow for the same commit leaves it to the first', () => {
+    const w = setup();
+    w.push('s1', ['src/rate/a.ts']);
+    expect(w.engine.beginCheck(w.id, 's1', 'npm test')).toBe(true);
+    expect(w.engine.beginCheck(w.id, 's1', 'npm test')).toBe(false);
+    w.engine.recordCheck(w.id, 's1', { status: 'passed', exitCode: 0, startedAt: 1, finishedAt: 2 });
+    expect(w.engine.beginCheck(w.id, 's1', 'npm test')).toBe(false);
+  });
+
+  it('two inspections in flight never move the head back to an older commit', () => {
+    const w = setup();
+    // The newer commit was seen as the tip later, and is recorded first.
+    w.engine.recordPush(w.id, { sha: 'new', ref: 'refs/heads/main', before: null, paths: ['src/rate/a.ts'], isHead: true, seenAt: 2000 });
+    const old = w.engine.recordPush(w.id, { sha: 'old', ref: 'refs/heads/main', before: null, paths: ['src/rate/a.ts'], isHead: true, seenAt: 1000 });
+    expect(old).toMatchObject({ accepted: false, reason: 'not-head' });
+    expect(w.engine.getClaim(w.id).headSha).toBe('new');
+  });
+
+  it('only a stale claim re-plans', () => {
+    const w = setup();
+    expect(() => w.engine.replan(w.id, w.token, { scope: ['**'], restsOn: [] })).toThrow(/not stale/);
+  });
+});

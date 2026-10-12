@@ -12,6 +12,7 @@ export class ArtifactsHost implements RepoHost {
       return { name: created.name, remote: created.remote };
     } catch (err) {
       if (codeOf(err) !== 'ALREADY_EXISTS') throw err;
+      await this.revokeLongLived(name);
       return this.describe(name);
     }
   }
@@ -23,6 +24,7 @@ export class ArtifactsHost implements RepoHost {
       return { name: forked.name, remote: forked.remote, head: await this.head(name) };
     } catch (err) {
       if (codeOf(err) !== 'ALREADY_EXISTS') throw err;
+      await this.revokeLongLived(name);
       return this.describe(name);
     }
   }
@@ -65,6 +67,20 @@ export class ArtifactsHost implements RepoHost {
   // the account 2026-10-12: revocation takes effect immediately).
   private async revokeInitial(name: string, token: string) {
     await this.withRepo(name, (r) => r.revokeToken(token));
+  }
+
+  // A repo found to exist already may be one whose initial 24-hour token was
+  // never revoked (the first attempt failed after creating it). Lease and
+  // admin tokens are far shorter, so any write token alive for 12 hours or
+  // more is that one.
+  private async revokeLongLived(name: string) {
+    await this.withRepo(name, async (r) => {
+      const { tokens } = await r.listTokens();
+      const cutoff = Date.now() + 12 * 3600_000;
+      for (const t of tokens) {
+        if (t.scope === 'write' && t.state === 'active' && Date.parse(t.expiresAt) > cutoff) await r.revokeToken(t.id);
+      }
+    });
   }
 
   private async describe(name: string): Promise<HostRepo> {
