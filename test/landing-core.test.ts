@@ -11,7 +11,7 @@ function setup() {
     leaseMs: 60_000, hedgeMs: 300_000, newToken: () => `tok${++n}`, dependencyGate: 'landed', landingTimeoutMs: 600_000,
   });
   const done = (statement: string, requires: string[] = []) => {
-    const c = engine.addClaim({ statement, scope: ['**'], requires });
+    const c = engine.addClaim({ statement, scope: ['**'], requires, orderOverlaps: false });
     const { token } = engine.claim(c.id, 'agent');
     engine.recordPush(c.id, { sha: `sha-${c.id}`, ref: 'refs/heads/main', before: null, paths: ['x'], isHead: true });
     engine.recordCheck(c.id, `sha-${c.id}`, { status: 'passed', exitCode: 0, startedAt: 0, finishedAt: 0 });
@@ -37,11 +37,11 @@ describe('the landing queue', () => {
 
   it('a claim waits for what it builds on to land, even if it finished first', () => {
     const w = setup();
-    const c = w.engine.addClaim({ statement: 'first', scope: ['**'] });
+    const c = w.engine.addClaim({ statement: 'first', scope: ['**'], orderOverlaps: false });
     const { token } = w.engine.claim(c.id, 'a');
     // Under the landed gate a dependent is not ready until c lands, so build
     // the order by hand: the dependent finishes before its dependency does.
-    const d = w.engine.addClaim({ statement: 'second', scope: ['**'], requires: [c.id] });
+    const d = w.engine.addClaim({ statement: 'second', scope: ['**'], requires: [c.id], orderOverlaps: false });
     expect(w.engine.isReady(d.id)).toBe(false);
     w.engine.finish(c.id, token);
     expect(w.engine.beginNextLanding('main')).toEqual(null); // no commits: landed as is

@@ -1,4 +1,4 @@
-import { inScope, outOfScope, validScope } from './scope';
+import { inScope, outOfScope, scopesOverlap, validScope } from './scope';
 import type { Store } from './store';
 import type {
   Assumption,
@@ -71,6 +71,9 @@ export interface NewClaim {
   restsOn?: string[]; // assumption ids
   requires?: string[]; // claim ids this one builds on
   baseSha?: string;
+  // Set false to let it run beside unfinished claims whose scope overlaps
+  // (a planner that wants competing changes to the same files).
+  orderOverlaps?: boolean;
 }
 
 export interface RenewResult {
@@ -146,7 +149,39 @@ export class Engine {
     this.store.putNode(c);
     for (const a of input.restsOn ?? []) this.store.addEdge({ source: a, target: c.id, purpose: 'required for' });
     for (const r of input.requires ?? []) this.store.addEdge({ source: r, target: c.id, purpose: 'required for' });
+    if (input.orderOverlaps !== false) this.orderOverlaps(c);
     return c;
+  }
+
+  // Conflicts predicted, not discovered: a new claim whose declared scope
+  // overlaps an unfinished claim on the same line, with no order between
+  // them, waits for that one to land. Two agents then never change the same
+  // files at once, and the merge that follows is a trivial one.
+  private orderOverlaps(c: Claim) {
+    for (const other of this.claims()) {
+      if (other.id === c.id || other.line !== c.line) continue;
+      if (other.status === 'landed' || other.status === 'superseded') continue;
+      if (!scopesOverlap(c.scope, other.scope)) continue;
+      if (this.buildsOn(c.id, other.id) || this.buildsOn(other.id, c.id)) continue;
+      this.store.addEdge({ source: other.id, target: c.id, purpose: 'required for' });
+      this.emit('claim.ordered', [], { claim: c.id, after: other.id, scope: c.scope, overlaps: other.scope });
+    }
+  }
+
+  // Does `later` build on `earlier`, directly or through other claims?
+  private buildsOn(later: string, earlier: string): boolean {
+    const seen = new Set<string>();
+    const queue = [earlier];
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (id === later) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const e of this.store.edgesFrom(id, 'required for')) {
+        if (this.store.getNode(e.target)?.kind === 'claim') queue.push(e.target);
+      }
+    }
+    return false;
   }
 
   // An agent declares what its work rests on, at claim time or later. The same

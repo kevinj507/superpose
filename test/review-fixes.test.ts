@@ -215,7 +215,8 @@ describe('reopening after a conflict', () => {
   it('the next holder gets read access to the line, and only its own changes count after merging the line in', async () => {
     const w = await seeded();
     const a = w.engine.addClaim({ statement: 'a', scope: ['src/shared.ts'] });
-    const b = w.engine.addClaim({ statement: 'b', scope: ['src/shared.ts'] });
+    // Planned to run side by side on purpose, so the merge can conflict.
+    const b = w.engine.addClaim({ statement: 'b', scope: ['src/shared.ts'], orderOverlaps: false });
     const ga = await w.coord.claim(a.id, 'a');
     const gb = await w.coord.claim(b.id, 'b');
     for (const [c, g, text] of [[a, ga, 'from a'], [b, gb, 'from b']] as const) {

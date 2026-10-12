@@ -62,3 +62,40 @@ export function inScope(path: string, scope: string[]): boolean {
 export function outOfScope(paths: string[], scope: string[]): string[] {
   return paths.filter((p) => !inScope(p, scope));
 }
+
+// Could some path match both patterns? Checked segment by segment, with the
+// answer remembered per position, so it stays fast for any pattern. When
+// both segments have wildcards it says yes: ordering two claims that might
+// collide is cheap; missing a collision is not.
+export function patternsOverlap(p: string, q: string): boolean {
+  const a = p.split('/');
+  const b = q.split('/');
+  const memo = new Map<number, boolean>();
+  const go = (i: number, j: number): boolean => {
+    const key = i * 1024 + j;
+    const known = memo.get(key);
+    if (known !== undefined) return known;
+    let r: boolean;
+    if (i === a.length && j === b.length) r = true;
+    else if (i < a.length && a[i] === '**') r = go(i + 1, j) || (j < b.length && go(i, j + 1));
+    else if (j < b.length && b[j] === '**') r = go(i, j + 1) || (i < a.length && go(i + 1, j));
+    else if (i === a.length || j === b.length) r = false;
+    else r = segmentsCompatible(a[i]!, b[j]!) && go(i + 1, j + 1);
+    memo.set(key, r);
+    return r;
+  };
+  return go(0, 0);
+}
+
+function segmentsCompatible(x: string, y: string): boolean {
+  const wx = x.includes('*');
+  const wy = y.includes('*');
+  if (!wx && !wy) return x === y;
+  if (!wy) return segmentMatches(x, y);
+  if (!wx) return segmentMatches(y, x);
+  return true;
+}
+
+export function scopesOverlap(a: string[], b: string[]): boolean {
+  return a.some((p) => b.some((q) => patternsOverlap(p, q)));
+}

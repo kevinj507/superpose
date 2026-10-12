@@ -194,3 +194,32 @@ describe('what agents spend on a claim', () => {
     expect(spend.usd).toBeCloseTo(0.02, 6);
   });
 });
+
+describe('conflicts predicted before work starts', () => {
+  it('a claim whose scope overlaps an unfinished one on its line waits for it, and says why', () => {
+    const w = setup();
+    const overlapping = w.engine.addClaim({ statement: 'limits per user', scope: ['src/rate/users.ts', 'src/rate/**'] });
+    const apart = w.engine.addClaim({ statement: 'docs', scope: ['docs/**'] });
+    expect(w.engine.isReady(overlapping.id)).toBe(false);
+    expect(w.engine.isReady(apart.id)).toBe(true);
+    expect(w.engine.events().find((e) => e.type === 'claim.ordered')).toMatchObject({ data: { claim: overlapping.id, after: w.id } });
+  });
+
+  it('claims already in order, on other lines, or planned side by side on purpose are left alone', () => {
+    const w = setup();
+    const built = w.engine.addClaim({ statement: 'b', scope: ['src/rate/**'], requires: [w.id] });
+    const free = w.engine.addClaim({ statement: 'c', scope: ['src/rate/**'], orderOverlaps: false });
+    expect(w.engine.events().filter((e) => e.type === 'claim.ordered').map((e) => e.data.claim)).not.toContain(built.id);
+    expect(w.engine.isReady(free.id)).toBe(true);
+  });
+
+  it('knows which patterns can meet', async () => {
+    const { patternsOverlap } = await import('../src/core/scope');
+    expect(patternsOverlap('src/**', 'src/a/b.ts')).toBe(true);
+    expect(patternsOverlap('src/a/**', 'src/b/**')).toBe(false);
+    expect(patternsOverlap('src/*.ts', 'src/x.js')).toBe(false);
+    expect(patternsOverlap('src/*.ts', 'src/*.js')).toBe(true); // both wildcards: assumed to meet
+    expect(patternsOverlap('**/package.json', 'package.json')).toBe(true);
+    expect(patternsOverlap('test/links.test.js', 'src/links.js')).toBe(false);
+  });
+});

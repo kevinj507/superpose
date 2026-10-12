@@ -219,13 +219,13 @@ describe('a refused commit is judged again when it comes up again', () => {
     const w = await seeded();
     const A = w.engine.addAssumption('counters can live in KV');
     const B = w.engine.addAssumption('counters live in a Durable Object');
-    const onA = w.engine.addClaim({ statement: 'count requests', scope: ['src/rate/**'], restsOn: [A.id] });
+    const onA = w.engine.addClaim({ statement: 'count requests', scope: ['src/count/**'], restsOn: [A.id] });
     const finder = w.engine.addClaim({ statement: 'watch', scope: ['notes/**'] });
     const f = await w.coord.claim(finder.id, 'finder');
     const g = await w.coord.claim(onA.id, 'agent');
     const { finding } = w.engine.fileFinding(finder.id, f.token, { statement: 'KV is eventually consistent', effect: 'contradicts', targets: [A.id] });
     w.engine.verifyFinding(finding.id);
-    const late = w.host.commit(g.repo.name, { 'src/rate/limit.ts': 'durable object counters' }, `x\n\nSuperpose-Claim: ${onA.id}`).after;
+    const late = w.host.commit(g.repo.name, { 'src/count/limit.ts': 'durable object counters' }, `x\n\nSuperpose-Claim: ${onA.id}`).after;
     expect(await w.coord.inspectPush(onA.id, { sha: late, ref: 'refs/heads/main', before: null })).toMatchObject({ accepted: false, reason: 'stale' });
     await w.coord.replan(onA.id, g.token, { restsOn: [B.id] });
     await w.coord.finish(onA.id, g.token);

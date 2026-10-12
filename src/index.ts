@@ -71,6 +71,7 @@ route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
     scope: strs(body.scope),
     cluster: str(body.cluster) || undefined,
     line: str(body.line) || undefined,
+    orderOverlaps: body.orderOverlaps === false ? false : undefined,
     restsOn: strs(body.restsOn),
     requires: strs(body.requires),
     baseSha: str(body.baseSha) || undefined,

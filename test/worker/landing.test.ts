@@ -87,7 +87,7 @@ describe('landing', () => {
   it('a textual conflict is a review item on the claim, which can be reopened', async () => {
     const { gid, g } = await graphWithLine();
     const a = (await api('POST', `${g}/claims`, ADMIN, { statement: 'a', scope: ['src/**'] })).data;
-    const b = (await api('POST', `${g}/claims`, ADMIN, { statement: 'b', scope: ['src/**'] })).data;
+    const b = (await api('POST', `${g}/claims`, ADMIN, { statement: 'b', scope: ['src/**'], orderOverlaps: false })).data;
     const wa = await claimAndWork(gid, a.id, { 'src/shared.ts': 'from a' });
     const wb = await claimAndWork(gid, b.id, { 'src/shared.ts': 'from b' });
     await api('POST', `${g}/claims/${a.id}/finish`, wa.grant.token);

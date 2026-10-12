@@ -186,6 +186,7 @@ export type EventType =
   | 'claim.replanned'
   | 'scope.touched' // another claim's push changed files in this claim's scope
   | 'claim.checked' // checks finished on one of the claim's commits
+  | 'claim.ordered' // planned after an unfinished claim whose scope overlaps it
   | 'claim.landed' // merged into its line, checks passing on the merged result
   | 'claim.landing_failed' // a conflict or failing checks on the merged result: needs a decision
   | 'reality.served' // a different line is now the served reality
