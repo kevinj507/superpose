@@ -306,6 +306,14 @@ export class Engine {
     return next;
   }
 
+  // Forget the check result on one commit so it can be checked again.
+  clearChecks(id: string, sha: string): void {
+    const row = this.store.getPush(id, sha);
+    if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
+    const { checks: _gone, ...rest } = row;
+    this.store.putPush({ ...rest, verdict: row.outside.length ? 'scope-violation' : 'unverified' });
+  }
+
   pushRecord(id: string, sha: string): PushRecord | undefined {
     return this.store.getPush(id, sha);
   }

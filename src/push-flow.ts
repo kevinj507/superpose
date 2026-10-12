@@ -38,6 +38,13 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
     if (!('record' in handled) || !needsChecks(handled.record)) return handled;
     const { graph, claim, record, repo } = handled;
     const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(graph));
+    // A commit already replaced by a newer one is not worth a container; the
+    // newer push gets its own run.
+    const current = await step.do('is it still the claim\'s latest commit?', async () => {
+      const r = await stub.headOf(claim);
+      return r.ok ? r.value : null;
+    });
+    if (current !== record.sha) return { ...handled, skipped: 'superseded by a newer commit' };
     const host = new ArtifactsHost(this.env.ARTIFACTS!);
     // Step results must be plain data, so only the verdict comes back.
     const recordCheck = async (check: CheckRun): Promise<string | null> => {
@@ -54,15 +61,25 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       return handled;
     }
     await step.do('mark the checks running', () => recordCheck({ status: 'running', command: config.check, startedAt: Date.now() }));
-    const run = await step.do(
-      'run the checks on the exact commit',
-      { retries: { limit: 1, delay: '15 seconds' }, timeout: '25 minutes' },
-      async (): Promise<CheckRun> => {
-        const exec = (job: ExecJob) =>
-          this.env.CHECKER.get(this.env.CHECKER.idFromName(`check:${graph}:${claim}:${record.sha}`)).run(job);
-        return runCheck(host, exec, repo, record.sha, config);
-      },
-    );
+    let run: CheckRun;
+    try {
+      run = await step.do(
+        'run the checks on the exact commit',
+        { retries: { limit: 2, delay: '30 seconds', backoff: 'linear' }, timeout: '25 minutes' },
+        async (): Promise<CheckRun> => {
+          const exec = (job: ExecJob) =>
+            this.env.CHECKER.get(this.env.CHECKER.idFromName(`check:${graph}:${claim}:${record.sha}`)).run(job);
+          const result = await runCheck(host, exec, repo, record.sha, config);
+          // The platform failing (no container, no fetch) is retried; the
+          // code failing is a verdict.
+          if (result.status === 'error') throw new Error(`the check could not run: ${result.log ?? ''}`.slice(0, 500));
+          return result;
+        },
+      );
+    } catch (err) {
+      const now = Date.now();
+      run = { status: 'error', command: config.check, startedAt: now, finishedAt: now, log: String(err).slice(0, 2000) };
+    }
     const verdict = await step.do('record the verdict', () => recordCheck(run));
     return { ...handled, verdict };
   }
@@ -72,6 +89,16 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
 // checked, is worth a container.
 function needsChecks(r: PushRecord): boolean {
   return r.accepted && r.verdict === 'unverified' && !r.checks;
+}
+
+// A push event made up by the platform, to check a commit whose own event
+// never led to a check (it arrived late, or the check is being re-run).
+export function syntheticPush(repoName: string, sha: string): ArtifactsEvent {
+  return {
+    type: 'cf.artifacts.repo.pushed',
+    source: { namespace: 'superpose', repoName },
+    payload: { ref: 'refs/heads/main', before: '0'.repeat(40), after: sha, commits: [] },
+  };
 }
 
 export async function handlePush(env: Env, e: ArtifactsEvent): Promise<HandledPush> {

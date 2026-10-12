@@ -74,6 +74,7 @@ route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
 );
 route('POST', '/api/graphs/:gid/claims/:id/land', 'admin', ({ graph, params }) => graph.land(params.id!));
 route('POST', '/api/graphs/:gid/claims/:id/reopen', 'admin', ({ graph, params }) => graph.reopen(params.id!));
+route('POST', '/api/graphs/:gid/claims/:id/recheck', 'admin', ({ graph, params }) => graph.recheck(params.id!));
 route('POST', '/api/graphs/:gid/landings', 'admin', async ({ graph, params }) => {
   await graph.pumpLandings(params.gid!);
   return { ok: true, value: null };

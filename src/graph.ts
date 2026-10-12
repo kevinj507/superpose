@@ -4,6 +4,7 @@ import { Coordinator, type PushReport, type Tx } from './core/coordinator';
 import { Engine, EngineError, type LandingOutcome, type NewClaim } from './core/engine';
 import { FakeRepoHost } from './core/fake-host';
 import { landingMessage } from './core/landing';
+import { syntheticPush } from './push-flow';
 import { lineRepoName, type RepoHost } from './core/repos';
 import type { CheckRun, PushRecord } from './core/types';
 import { SqlStore } from './sql-store';
@@ -196,8 +197,41 @@ export class Graph extends DurableObject<Env> {
 
   async finish(graph: string, id: string, token: string) {
     const r = await this.runWithRepos(graph, (c) => c.finish(id, token));
-    if (r.ok) await this.pumpLandings(graph);
+    if (r.ok) {
+      await this.checkHeadIfUnchecked(id);
+      await this.pumpLandings(graph);
+    }
     return r;
+  }
+
+  headOf(id: string) {
+    return this.run((e) => e.getClaim(id).headSha ?? null);
+  }
+
+  // Run the checks on a claim's latest commit again (admin), e.g. after the
+  // platform failed to run them.
+  async recheck(id: string) {
+    const c = this.run((e) => e.getClaim(id));
+    if (!c.ok) return c;
+    if (!c.value.headSha || !c.value.repo) return { ok: false as const, code: 'no_repo', message: `claim ${id} has no commits` };
+    const sha = c.value.headSha;
+    this.run((e) => e.clearChecks(id, sha));
+    await this.startCheck(c.value.repo.name, sha);
+    return { ok: true as const, value: { sha } };
+  }
+
+  // A finished claim whose latest commit has no checks recorded would never
+  // land; start them.
+  private async checkHeadIfUnchecked(id: string) {
+    const c = this.engine.getClaim(id);
+    if (!c.headSha || !c.repo) return;
+    const row = this.engine.pushRecord(id, c.headSha);
+    if (row && row.accepted && !row.checks) await this.startCheck(c.repo.name, c.headSha);
+  }
+
+  private async startCheck(repoName: string, sha: string) {
+    if (this.repoHost instanceof FakeRepoHost || !this.env.PUSHES) return;
+    await this.env.PUSHES.create({ params: syntheticPush(repoName, sha) }).catch(() => {});
   }
 
   reopen(id: string) {
