@@ -14,6 +14,8 @@ export interface RepoHost {
   readTree(repo: string, tree: string): Promise<HostTreeEntry[] | null>;
   // Tip of the default branch, or null for an empty repo.
   readHead(repo: string): Promise<string | null>;
+  // A file's text at a commit, or null if it does not exist there.
+  readFile(repo: string, ref: string, path: string): Promise<string | null>;
 }
 
 export interface HostRepo extends RepoRef {

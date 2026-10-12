@@ -271,6 +271,7 @@ export class Engine {
       if (check.status === 'passed') verdict = 'checks-passed';
       else if (check.status === 'failed') verdict = 'checks-failed';
       else if (check.status === 'error') verdict = 'verifier-failed';
+      else if (check.status === 'timeout') verdict = 'budget-exhausted';
       else verdict = 'unverified';
     }
     const next: PushRecord = { ...row, checks: check, verdict };

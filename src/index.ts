@@ -1,6 +1,7 @@
 import type { Result } from './graph';
 
 export { Graph } from './graph';
+export { Checker } from './checker';
 export { PushFlow } from './push-flow';
 
 // HTTP API in front of the per-graph Durable Objects.

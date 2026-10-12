@@ -4,9 +4,27 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "durable_objects": {
-    "bindings": [{ "name": "GRAPH", "class_name": "Graph" }]
+    "bindings": [
+      { "name": "GRAPH", "class_name": "Graph" },
+      { "name": "CHECKER", "class_name": "Checker" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Graph"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Graph"] },
+    { "tag": "v2", "new_sqlite_classes": ["Checker"] }
+  ],
+  // Checks and landings run in a fresh container each, from a public image
+  // (plain Node with git), so nothing is built locally.
+  "containers": [
+    {
+      "class_name": "Checker",
+      "image": "docker.io/library/node:22-bookworm",
+      "max_instances": 8,
+      "instance_type": "basic"
+    }
+  ],
+  // No Docker here: containers run only when deployed.
+  "dev": { "enable_containers": false },
   // Every claim gets its own repo here: a fork of its line, named <graph>.claim.<id>.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "superpose" }],
   // Every push to any repo in the namespace starts a PushFlow, which reads the

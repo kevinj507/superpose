@@ -99,7 +99,9 @@ export type Verdict =
   | 'budget-exhausted';
 
 export interface CheckRun {
-  status: 'running' | 'passed' | 'failed' | 'error';
+  // timeout: the check overran its timebox (verdict budget-exhausted);
+  // skipped: the commit declares no checks (the verdict stays unverified).
+  status: 'running' | 'passed' | 'failed' | 'error' | 'timeout' | 'skipped';
   command?: string;
   exitCode?: number;
   log?: string; // the tail of the output

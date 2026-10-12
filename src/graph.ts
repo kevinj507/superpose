@@ -99,9 +99,13 @@ export class Graph extends DurableObject<Env> {
     return this.runWithRepos(graph, (c) => c.notePush(id, token, sha));
   }
 
-  // A push event from the trigger.
+  // A push event from the trigger. Returns the claim's repo too, so the
+  // checks can fetch the commit.
   recordPush(graph: string, id: string, push: PushReport) {
-    return this.runWithRepos(graph, (c) => c.inspectPush(id, push));
+    return this.runWithRepos(graph, async (c) => {
+      const record = await c.inspectPush(id, push);
+      return { record, repo: this.engine.getClaim(id).repo! };
+    });
   }
 
   recordCheck(id: string, sha: string, check: CheckRun) {
@@ -159,5 +163,14 @@ function missingHost(): RepoHost {
   const fail = async (): Promise<never> => {
     throw new EngineError('repo_unavailable', 'no git host: bind ARTIFACTS, or set REPO_HOST=fake for local use');
   };
-  return { ensure: fail, fork: fail, mintToken: fail, revokeToken: fail, readCommit: fail, readTree: fail, readHead: fail };
+  return {
+    ensure: fail,
+    fork: fail,
+    mintToken: fail,
+    revokeToken: fail,
+    readCommit: fail,
+    readTree: fail,
+    readHead: fail,
+    readFile: fail,
+  };
 }

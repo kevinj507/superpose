@@ -105,6 +105,11 @@ export class FakeRepoHost implements RepoHost {
     return this.kv.get<HostTreeEntry[]>(`tree:${tree}`) ?? null;
   }
 
+  async readFile(repo: string, ref: string, path: string): Promise<string | null> {
+    if (!this.repo(repo)) throw hostError('NOT_FOUND', `no repo ${repo}`);
+    return this.files(ref).get(path) ?? null;
+  }
+
   async readHead(repo: string): Promise<string | null> {
     const r = this.repo(repo);
     if (!r) throw hostError('NOT_FOUND', `no repo ${repo}`);
