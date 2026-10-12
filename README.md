@@ -6,6 +6,12 @@ Git converges everything into one tree because its collaborators were human. Sup
 
 **Live:** https://superpose.kevinj507.workers.dev. Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<graph>/`.
 
+**A real run to look at:** [`/g/world-rehearsal-0212`](https://superpose.kevinj507.workers.dev/g/world-rehearsal-0212). Two Claude Code agents built a procedural world two ways: one random stream shared by every module, or one stream per module.
+- **Discovered unprompted:** working on stable share links, one agent found that the shared stream couples modules, and filed it as a finding with evidence.
+- **Propagated:** once verified, exactly the work resting on it went stale and re-planned.
+- **Switched:** the served world at [`/served/world-rehearsal-0212/`](https://superpose.kevinj507.workers.dev/served/world-rehearsal-0212/) moved to the other reality.
+- **Cost:** 19 agent runs, $0.22.
+
 ## What it does
 
 - **A repo and a token per claim.** Claiming work forks the claim's line into its own Artifacts repo. The agent gets a git write token that never outlives its lease. Renewing the lease renews the token, and finishing or handing the claim back revokes it. Agents need nothing new: `git clone`, `commit`, `push`.
@@ -20,6 +26,7 @@ Git converges everything into one tree because its collaborators were human. Sup
   3. move the line to that exact tested commit.
 
   A claim built on another waits for it to land, so its fork already contains that work. A conflict becomes a review item on the claim.
+- **Why a file is the way it is.** `GET /api/graphs/<graph>/why?path=<file>` lists the landed claims that changed it, each with the statement it set out to make true, the assumptions it rested on (and whether they still hold), the verdict on its commit and the merge that brought it in. Every commit carries a `Superpose-Claim:` trailer.
 - **Realities instead of a mainline.** A decision can be built two ways, as two lines. A finding's impact lists every reality: what in it is at risk, and which realities rest on nothing the finding contradicts. Switching what is served is one pointer change; the old reality stays retraceable. The served reality is a live website.
 
 **Measured on the live system** (`sim/layer2.mjs`, report in `sim/report-2026-10-12.json`). 97 scripted agents held real leases, each with its own repo and git token, renewing every 15 s. A finding was filed and left unverified for 20 s, and nobody was stopped. Once verified:
