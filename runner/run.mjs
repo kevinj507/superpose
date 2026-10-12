@@ -455,6 +455,7 @@ class Slot {
     const dir = join(this.opts.workDir, this.opts.graph, id);
     this.claimId = id;
     this.dir = dir;
+    this.transcript = null;
     this.set({ claim: id, state: 'preparing', since: Date.now(), last: 'cloning its repository' });
     const t0 = Date.now();
     await this.prepare(dir, grant);

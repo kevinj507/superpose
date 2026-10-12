@@ -5,7 +5,7 @@
 //   node runner/superpose.mjs assume "<statement>"
 //   node runner/superpose.mjs finding --contradicts <assumption id> "<statement>"
 //   node runner/superpose.mjs finding --helps <claim id> "<statement>"
-//   node runner/superpose.mjs replan [--rests-on <ids>] [--scope <patterns>] [--statement "<text>"]
+//   node runner/superpose.mjs replan [--rests-on <ids>] [--add-scope <patterns>] [--statement "<text>"]
 //   node runner/superpose.mjs done
 //   node runner/superpose.mjs release ["<why>"]
 //   node runner/superpose.mjs notices
@@ -55,8 +55,10 @@ const USAGE = `Usage: ${CMD} <command> [options]
   assume "<statement>"                     declare an assumption your work rests on (or: assume --id <assumption id>)
   finding --contradicts <id> "<statement>" report that an assumption is false, with the evidence
   finding --helps <claim id> "<statement>" offer something useful to another claim
-  replan [--rests-on <ids|none>] [--scope <patterns>] [--statement "<text>"]
-                                           re-plan the claim (after it goes stale); ids and patterns are comma-separated
+  replan [--rests-on <ids|none>] [--add-scope <patterns> | --scope <patterns>] [--statement "<text>"]
+                                           re-plan the claim (after it goes stale, or to widen its scope);
+                                           --rests-on defaults to the assumptions that still hold; --add-scope
+                                           widens the scope, --scope replaces it; lists are comma-separated
   done [--wait <seconds>]                  push if needed, wait for the platform's verdict and tests on
                                            that exact commit (default up to 90 s), then finish the claim
   release ["<why>"]                        hand the claim back unfinished
@@ -71,6 +73,7 @@ const OPTIONS = {
   helps: { type: 'string', multiple: true },
   'rests-on': { type: 'string', multiple: true },
   scope: { type: 'string', multiple: true },
+  'add-scope': { type: 'string', multiple: true },
   statement: { type: 'string' },
   id: { type: 'string' },
   wait: { type: 'string' },
@@ -240,6 +243,13 @@ async function finding({ dir, claim, api }, values, positionals) {
     } else if (impact) {
       out.push('If it is verified, no other claim in progress is affected.');
     }
+    const own = index ? claimContext(index, claim.claim).restsOn.filter((a) => targets.includes(a.id)) : [];
+    if (own.length) {
+      out.push(
+        `Your own claim rests on ${own.map((a) => a.id).join(', ')} too. If your work no longer relies on it, say what it relies on instead and re-plan:\n` +
+          `  ${CMD} assume "<what your work relies on now>"\n  ${CMD} replan --rests-on <the ids that still hold, plus the new one>`,
+      );
+    }
   } else {
     out.push(`It is offered to ${named}. If a checker verifies it, their agents are told.`);
   }
@@ -260,7 +270,13 @@ async function replan({ dir, claim, api }, values) {
     restsOn = ctx.restsOn.filter((a) => a.status === 'holding').map((a) => a.id);
     kept = true;
   }
-  const scope = values.scope ? list(values.scope) : undefined;
+  // --scope replaces the scope; --add-scope widens the current one.
+  const current = ctx?.claim?.scope ?? claim.scope;
+  const scope = values.scope
+    ? list(values.scope)
+    : values['add-scope']
+      ? [...new Set([...current, ...list(values['add-scope'])])]
+      : undefined;
   const res = await api.replan(claim.lease, claim.claim, { restsOn, scope, statement: values.statement });
   if (!res.ok) {
     if (res.data?.error === 'contradicted') {
@@ -333,7 +349,7 @@ async function done({ dir, claim, api }, values) {
     throw new Refused(
       `Your work changes files outside the claim's scope (${claim.scope.join(', ')}):\n  ${outside.join('\n  ')}\n` +
         `Put them back as they were at the start (\`git checkout ${shortSha(claim.baseSha)} -- <file>\`, or \`git rm <file>\` for new files), ` +
-        `commit, and run done again. If the claim truly needs them, widen the scope with \`${CMD} replan --scope <patterns>\`.`,
+        `commit, and run done again. If the claim truly needs them, widen the scope with \`${CMD} replan --add-scope <patterns>\`.`,
     );
   }
 
@@ -510,7 +526,7 @@ function prePush({ dir, claim }) {
       problems.push(
         `These files are outside the claim's scope (${claim.scope.join(', ')}):\n    ${outside.join('\n    ')}\n` +
           `  Put them back as they were at the start (git checkout ${shortSha(claim.baseSha)} -- <file>, or git rm for new files) and commit,\n` +
-          `  or, if the claim truly needs them, widen the scope: ${CMD} replan --scope <patterns>`,
+          `  or, if the claim truly needs them, widen the scope: ${CMD} replan --add-scope <patterns>`,
       );
     }
     const range = remoteSha && !ZERO.test(remoteSha) ? `${remoteSha}..${localSha}` : claim.baseSha ? `${claim.baseSha}..${localSha}` : localSha;

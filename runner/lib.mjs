@@ -442,7 +442,7 @@ export function describeNotice(n, index, claimId) {
           'Do this now, before the lease runs out:\n' +
           '1. Decide how the work must change now that the assumption is false.\n' +
           `2. If the new approach relies on something new, declare it: \`${CMD} assume "<statement>"\` (prints its id).\n` +
-          `3. Re-plan: \`${CMD} replan --rests-on <ids that still hold>\` (add \`--scope <patterns>\` if the scope must change).\n` +
+          `3. Re-plan: \`${CMD} replan --rests-on <ids that still hold>\` (add \`--add-scope <patterns>\` if it needs more files).\n` +
           '4. Rework the code, commit, and push again.',
       };
     case 'claim.helped':
@@ -566,7 +566,7 @@ export function renderClaimMd(claim, index, dir) {
     '',
     '`**` matches any number of folders and `*` matches within one name. The platform checks every push against',
     'this scope from the commit itself, and the pre-push hook refuses a push that changes anything else. If the claim',
-    `truly cannot be done inside this scope, widen it with \`${CMD} replan --scope <patterns>\` rather than editing other files.`,
+    `truly cannot be done inside this scope, widen it with \`${CMD} replan --add-scope <patterns>\` rather than editing other files.`,
     '',
   );
   lines.push('## What this claim rests on', '');
@@ -621,7 +621,7 @@ export function renderClaimMd(claim, index, dir) {
     `- \`${CMD} assume "<statement>"\`: declare something your work relies on`,
     `- \`${CMD} finding --contradicts <assumption id> "<what is false, and the evidence>"\`: report a false assumption`,
     `- \`${CMD} finding --helps <claim id> "<what helps that claim>"\`: offer something useful to another claim`,
-    `- \`${CMD} replan --rests-on <assumption ids> [--scope <patterns>]\`: re-plan a stale claim`,
+    `- \`${CMD} replan --rests-on <assumption ids> [--add-scope <patterns>]\`: re-plan a stale claim, or widen its scope`,
     `- \`${CMD} done\`: push if needed, wait for the platform's verdict on that exact commit (scope, then tests), then finish the claim; if the tests fail it shows the output and does not finish`,
     `- \`${CMD} release "<why>"\`: give the claim back`,
     '',
@@ -632,7 +632,7 @@ export function renderClaimMd(claim, index, dir) {
     '',
     '1. Read the notice: which assumption fell, and what was found.',
     `2. Decide how the work must change. If the new approach relies on something new, declare it: \`${CMD} assume "<statement>"\` (it prints an id).`,
-    `3. Re-plan: \`${CMD} replan --rests-on <ids that still hold>\` (add \`--scope\` if the scope must change).`,
+    `3. Re-plan: \`${CMD} replan --rests-on <ids that still hold>\` (add \`--add-scope <patterns>\` if it needs more files).`,
     '4. Rework the code to match the new plan, commit, push, and carry on.',
     '',
   );

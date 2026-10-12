@@ -14,28 +14,52 @@
   "claims": [
     {
       "key": "slugify",
-      "statement": "src/slugify.js exports slugify(text): lower case, every run of characters other than letters and digits becomes a single hyphen, and there is no hyphen at either end. test/slugify.test.js covers it.",
-      "scope": ["src/slugify.js", "test/slugify.test.js"],
-      "restsOn": ["ascii", "node"]
+      "statement": "src/slugify.js exports slugify(text): lower case, every run of characters other than letters and digits becomes a single hyphen, and there is no hyphen at either end. It gives a readable slug for every title in data/titles.txt. test/slugify.test.js covers it.",
+      "scope": [
+        "src/slugify.js",
+        "test/slugify.test.js"
+      ],
+      "restsOn": [
+        "ascii",
+        "node"
+      ]
     },
     {
       "key": "truncate",
       "statement": "src/truncate.js exports truncate(text, max): the text unchanged if it has at most max characters; otherwise cut at the last space that fits and ended with \"...\", so the result has at most max characters. test/truncate.test.js covers it.",
-      "scope": ["src/truncate.js", "test/truncate.test.js"],
-      "restsOn": ["ascii", "node"]
+      "scope": [
+        "src/truncate.js",
+        "test/truncate.test.js"
+      ],
+      "restsOn": [
+        "ascii",
+        "node"
+      ]
     },
     {
       "key": "word-count",
       "statement": "src/word-count.js exports wordCount(text): the number of words separated by whitespace, and 0 for an empty or blank string. test/word-count.test.js covers it.",
-      "scope": ["src/word-count.js", "test/word-count.test.js"],
-      "restsOn": ["node"]
+      "scope": [
+        "src/word-count.js",
+        "test/word-count.test.js"
+      ],
+      "restsOn": [
+        "node"
+      ]
     },
     {
       "key": "unique-slug",
       "statement": "src/unique-slug.js exports uniqueSlug(slug, taken): the slug itself if the Set taken does not contain it, otherwise the first of slug-2, slug-3, ... that it does not contain. It is meant to be called on slugify's output. test/unique-slug.test.js covers it.",
-      "scope": ["src/unique-slug.js", "test/unique-slug.test.js"],
-      "restsOn": ["node"],
-      "requires": ["slugify"]
+      "scope": [
+        "src/unique-slug.js",
+        "test/unique-slug.test.js"
+      ],
+      "restsOn": [
+        "node"
+      ],
+      "requires": [
+        "slugify"
+      ]
     }
   ]
 }
