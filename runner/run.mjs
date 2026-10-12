@@ -627,6 +627,7 @@ class Slot {
       env: agentEnv({
         SUPERPOSE_SCRIPTED_HOLD: String(this.opts.hold ?? 0),
         ...(process.env.SUPERPOSE_SCRIPTED_STRAY ? { SUPERPOSE_SCRIPTED_STRAY: process.env.SUPERPOSE_SCRIPTED_STRAY } : {}),
+        ...(process.env.SUPERPOSE_SCRIPTED_FINDINGS ? { SUPERPOSE_SCRIPTED_FINDINGS: process.env.SUPERPOSE_SCRIPTED_FINDINGS } : {}),
       }),
     };
   }

@@ -3,6 +3,7 @@ import type { Result } from './graph';
 export { Graph } from './graph';
 export { Checker } from './checker';
 export { LandFlow } from './land-flow';
+export { PlayFlow } from './play-flow';
 export { PushFlow } from './push-flow';
 
 // HTTP API in front of the per-graph Durable Objects.
@@ -198,6 +199,15 @@ async function served(env: Env, gid: string, rest: string): Promise<Response> {
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
+    // The playground: start (or join) a run anyone can watch, no token needed.
+    if (url.pathname === '/api/play' && request.method === 'POST') {
+      const lobby = env.GRAPH.get(env.GRAPH.idFromName('__playground'));
+      try {
+        return json(200, await lobby.playLobby(url.origin));
+      } catch (err) {
+        return json(503, { error: 'unavailable', message: `the playground could not start: ${String(err)}` });
+      }
+    }
     const servedPath = /^\/served\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(\/.*)?$/.exec(url.pathname);
     if (servedPath && request.method === 'GET') return served(env, servedPath[1]!, servedPath[2] ?? '/');
     const match = routes
