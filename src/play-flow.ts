@@ -30,11 +30,12 @@ const PLAY_SCRIPT = `
 set -u
 cd /play || exit 1
 node runner/plan.mjs scenarios/world --graph "$GRAPH" || exit 1
-node runner/play-director.mjs --graph "$GRAPH" --hedge 20 --timeout 900 > /tmp/director.log 2>&1 &
+node runner/play-director.mjs --graph "$GRAPH" --hedge 20 --timeout 1500 > /tmp/director.log 2>&1 &
 director=$!
-node runner/run.mjs --graph "$GRAPH" --agents 4 --agent scripted --hold 6 --quiet --patience 300 --work /tmp/work --runs /tmp/runs
-# The agents are done: give the director two minutes to switch, then stop.
-( sleep 120; kill $director 2>/dev/null ) &
+node runner/run.mjs --graph "$GRAPH" --agents 4 --agent scripted --hold 6 --quiet --patience 600 --work /tmp/work --runs /tmp/runs
+# The agents can be done while the last landings are still on their way, and
+# the director switches only after those land, so it is bounded by its own
+# --timeout rather than stopped here.
 wait $director
 echo "--- director"
 tail -n 20 /tmp/director.log
