@@ -3,13 +3,16 @@
 //
 //   node runner/plan.mjs scenarios/<name> --graph <gid>
 //
-// scenarios/<name>/plan.json lists the assumptions and claims:
+// scenarios/<name>/plan.json lists the assumptions and claims, and optionally
+// more lines (one decision built two ways):
 //   { "assumptions": [{ "key": "ascii", "statement": "..." }],
+//     "lines": [{ "name": "fast", "from": "main", "decision": "storage", "option": "in memory" }],
 //     "claims": [{ "key": "slugify", "statement": "...", "scope": ["src/slugify.js"],
-//                  "restsOn": ["ascii"], "requires": ["other claim key"] }] }
+//                  "restsOn": ["ascii"], "requires": ["other claim key"], "line": "fast" }] }
 // scenarios/<name>/seed/ is the starter code. It is pushed to the graph's main
-// line in one commit (claims fork the line when they are taken, so it goes
-// first), then the assumptions and claims are created with the admin token.
+// line in one commit (claims fork their line when they are taken, so it goes
+// first); then the other lines are forked from it, and the assumptions and
+// claims are created with the admin token. A claim without "line" builds on main.
 
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,6 +47,14 @@ function readPlan(dir) {
     if (aKeys.has(a.key)) throw new UsageError(`assumption key "${a.key}" is used twice`);
     aKeys.add(a.key);
   }
+  const lines = plan.lines ?? [];
+  const lineNames = new Set(['main']);
+  for (const l of lines) {
+    if (!l.name || !/^[A-Za-z0-9_-]{1,64}$/.test(l.name)) throw new UsageError(`every line needs a name of letters, digits, - and _: ${JSON.stringify(l)}`);
+    if (lineNames.has(l.name)) throw new UsageError(`line "${l.name}" is listed twice (main exists already)`);
+    if (l.from && !lineNames.has(l.from)) throw new UsageError(`line "${l.name}" is forked from "${l.from}", which is not listed before it`);
+    lineNames.add(l.name);
+  }
   const cKeys = new Set(claims.map((c) => c.key));
   if (cKeys.size !== claims.length) throw new UsageError('claim keys must be unique');
   for (const c of claims) {
@@ -52,8 +63,9 @@ function readPlan(dir) {
     }
     for (const k of c.restsOn ?? []) if (!aKeys.has(k)) throw new UsageError(`claim "${c.key}" rests on unknown assumption "${k}"`);
     for (const k of c.requires ?? []) if (!cKeys.has(k)) throw new UsageError(`claim "${c.key}" requires unknown claim "${k}"`);
+    if (c.line && !lineNames.has(c.line)) throw new UsageError(`claim "${c.key}" builds on unknown line "${c.line}"`);
   }
-  return { name: plan.name ?? basename(dir), assumptions, claims: inDependencyOrder(claims) };
+  return { name: plan.name ?? basename(dir), assumptions, lines, claims: inDependencyOrder(claims) };
 }
 
 // Claims are created after the claims they require (the API checks they exist).
@@ -138,6 +150,14 @@ async function main() {
       console.log('No seed/ folder: the main line starts empty.');
     }
 
+    for (const l of plan.lines) {
+      const from = l.from || 'main';
+      const res = await api.createLine(admin, l.name, { from, ...(l.decision ? { decision: l.decision } : {}), ...(l.option ? { option: l.option } : {}) });
+      if (!res.ok) throw new Error(`could not create line "${l.name}": ${explainError(res)}`);
+      const what = [l.decision && `decision "${l.decision}"`, l.option && `option "${l.option}"`].filter(Boolean).join(', ');
+      console.log(`  line       ${l.name}: forked from ${from}${what ? ` (${what})` : ''}`);
+    }
+
     const ids = { assumptions: {}, claims: {} };
     for (const a of plan.assumptions) {
       const res = await api.addAssumption(admin, a.statement);
@@ -156,12 +176,18 @@ async function main() {
       if (!res.ok) throw new Error(`could not create claim "${c.key}": ${explainError(res)}`);
       ids.claims[c.key] = res.data.id;
       const deps = [...(c.restsOn ?? []).map((k) => ids.assumptions[k]), ...(c.requires ?? []).map((k) => ids.claims[k])];
-      console.log(`  claim      ${res.data.id.padEnd(4)} ${c.key}: scope ${c.scope.join(', ')}${deps.length ? `; rests on ${deps.join(', ')}` : ''}`);
+      console.log(
+        `  claim      ${res.data.id.padEnd(4)} ${c.key}: scope ${c.scope.join(', ')}${deps.length ? `; rests on ${deps.join(', ')}` : ''}` +
+          (c.line && c.line !== 'main' ? `; line ${c.line}` : ''),
+      );
     }
     const runsDir = join(resolve(values.runs ?? join(REPO_DIR, 'runs')), graph);
     mkdirSync(runsDir, { recursive: true });
     writeFileSync(join(runsDir, 'plan-ids.json'), JSON.stringify({ graph, url, scenario: plan.name, ...ids }, null, 2) + '\n');
-    console.log(`\nGraph ${graph} is ready: ${plan.assumptions.length} assumptions, ${plan.claims.length} claims.`);
+    console.log(
+      `\nGraph ${graph} is ready: ${plan.assumptions.length} assumptions, ${plan.claims.length} claims` +
+        `${plan.lines.length ? `, ${plan.lines.length + 1} lines` : ''}.`,
+    );
     console.log(`Canvas: ${canvasUrl(url, graph)}`);
     console.log(`Start agents: node runner/run.mjs --graph ${graph} --agents 3`);
     return 0;

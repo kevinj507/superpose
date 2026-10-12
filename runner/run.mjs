@@ -368,19 +368,25 @@ class Slot {
       this.log(`could not read the ready claims: ${explainError(ready)}`);
       return null;
     }
-    const wanted = (c) => !this.runner.inFlight.has(c.id) && this.runner.mayTake(c.id);
-    let candidates = ready.data.filter(wanted);
+    const wanted = (c) =>
+      !this.runner.inFlight.has(c.id) && this.runner.mayTake(c.id) && !(this.opts.skipStale && c.status === 'stale');
+    // Open claims first; then claims whose agent stopped renewing, which the
+    // ready list also offers (the work so far is in their repo).
+    const fresh = ready.data.filter((c) => wanted(c) && c.status === 'open');
+    const lapsed = ready.data.filter((c) => wanted(c) && c.status !== 'open');
     // Agents start at different places in the list, so they rarely collide.
-    const k = candidates.length ? (this.n - 1) % candidates.length : 0;
-    candidates = [...candidates.slice(k), ...candidates.slice(0, k)];
-    // Then claims that went stale with nobody holding them (a verified finding
+    const k = fresh.length ? (this.n - 1) % fresh.length : 0;
+    const candidates = [...fresh.slice(k), ...fresh.slice(0, k), ...lapsed];
+    // Claims that went stale with nobody holding them (a verified finding
     // reached them while they waited, or after they were finished): whoever
-    // takes one re-plans it before working on it.
+    // takes one re-plans it before working on it. Older deployments leave
+    // them out of the ready list, so look in the graph as well.
     if (!this.opts.skipStale) {
       const index = await this.runner.snapshot({ maxAgeMs: 0 });
       const now = Date.now();
+      const listed = new Set(candidates.map((c) => c.id));
       const orphans = [...(index?.nodes.values() ?? [])].filter(
-        (n) => n.kind === 'claim' && n.status === 'stale' && (!n.lease || n.lease.expiresAt <= now) && wanted(n),
+        (n) => n.kind === 'claim' && n.status === 'stale' && (!n.lease || n.lease.expiresAt <= now) && wanted(n) && !listed.has(n.id),
       );
       candidates.push(...orphans);
     }
@@ -391,7 +397,12 @@ class Slot {
       const res = await this.api.claim(this.opts.agentKey, c.id, this.name);
       if (res.ok) {
         this.runner.attempts.set(c.id, (this.runner.attempts.get(c.id) ?? 0) + 1);
-        const stale = res.data.status === 'stale' ? ' (stale: it must be re-planned first)' : '';
+        const stale =
+          res.data.status === 'stale'
+            ? ' (stale: it must be re-planned first)'
+            : c.status === 'claimed'
+              ? ` (taken over from ${c.lease?.holder ?? 'an agent'} whose lease lapsed)`
+              : '';
         this.log(`took ${c.id} in ${Date.now() - t0} ms${stale}: ${c.statement}`);
         return { id: c.id, node: c, ...res.data };
       }
@@ -420,9 +431,10 @@ class Slot {
     if (!index) return false;
     const claims = [...index.nodes.values()].filter((n) => n.kind === 'claim');
     const now = Date.now();
+    const lapsed = (c) => !c.lease || c.lease.expiresAt <= now;
     const takeable = (c) =>
       this.runner.mayTake(c.id) &&
-      (c.status === 'open' || (c.status === 'stale' && !this.opts.skipStale && (!c.lease || c.lease.expiresAt <= now)));
+      (c.status === 'open' || (c.status === 'claimed' && lapsed(c)) || (c.status === 'stale' && !this.opts.skipStale && lapsed(c)));
     if (!claims.some(takeable)) return true;
     if (this.runner.inFlight.size) return false;
     const live = claims.some((c) => (c.status === 'claimed' || c.status === 'stale') && c.lease && c.lease.expiresAt > Date.now());

@@ -117,6 +117,9 @@ export class Api {
   lineAccess(admin, line, scope, ttl) {
     return this.request('POST', `/lines/${line}/access`, { token: admin, body: { scope, ttl } });
   }
+  createLine(admin, name, input) {
+    return this.request('POST', `/lines/${name}`, { token: admin, body: input, timeoutMs: 90_000 });
+  }
   verify(admin, finding) {
     return this.request('POST', `/findings/${finding}/verify`, { token: admin });
   }
