@@ -9,7 +9,8 @@ import {
   type ExecOutcome,
 } from './checks';
 import type { LandingOutcome } from './engine';
-import type { RepoHost } from './repos';
+import { changedPathsChecked, type RepoHost } from './repos';
+import { inScope } from './scope';
 import type { CheckRun, RepoRef } from './types';
 
 // Landing runs in three containers, so code from the repo never runs where a
@@ -130,6 +131,23 @@ export async function promoteLanding(host: RepoHost, exec: Exec, line: RepoRef, 
   } finally {
     await host.revokeToken(line.name, lineToken.id).catch(() => {});
   }
+}
+
+// What a landing would change on its line outside the claim's scope. A
+// claim's pushes are judged from a base chosen when each push arrives, but
+// git merges from the merge base, and the two can differ: a reopened claim,
+// or one that merged other work in, could make its landing undo files it
+// does not own. So the exact merge is judged against the line head it was
+// made on, before anything runs on it, and lands only if this is empty.
+export async function outsideScope(host: RepoHost, line: string, base: string | null, merge: string, scope: string[]): Promise<string[]> {
+  const listed = await changedPathsChecked(host, line, base, merge);
+  if (listed.tooLarge) return ['(more changed files than can be listed)'];
+  return listed.paths.filter((path) => !inScope(path, scope));
+}
+
+export function outsideScopeOutcome(outside: string[]): Exclude<LandingOutcome, { status: 'landed' }> {
+  const shown = outside.slice(0, 20).join(', ') + (outside.length > 20 ? `, and ${outside.length - 20} more` : '');
+  return { status: 'failed', log: `not landed: the merge changes files outside the claim's scope: ${shown}` };
 }
 
 // What the checks on the merged result mean for the landing.

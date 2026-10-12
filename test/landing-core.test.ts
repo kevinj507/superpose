@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { EXIT_FETCH_FAILED, EXIT_MERGE_CONFLICT } from '../src/core/checks';
 import { Engine } from '../src/core/engine';
-import { landingFromCheck, landingMessage, mergeResult, MERGE_SCRIPT, PROMOTE_SCRIPT } from '../src/core/landing';
+import { FakeRepoHost, MapKeyValue } from '../src/core/fake-host';
+import { landingFromCheck, landingMessage, mergeResult, MERGE_SCRIPT, outsideScope, outsideScopeOutcome, PROMOTE_SCRIPT } from '../src/core/landing';
 import { MemoryStore } from '../src/core/store';
 
 function setup() {
@@ -117,5 +118,48 @@ describe('giving up on a stuck landing', () => {
     expect(w.engine.abandonLanding('main')).toBe(a);
     expect(w.engine.getClaim(a).landing).toMatchObject({ status: 'error', attempts: 1 });
     expect(w.engine.beginNextLanding('main')?.claim).toBe(a);
+  });
+});
+
+describe('judging what a landing changes on its line', () => {
+  // The line after claim X landed its change to src/a/x.ts.
+  async function line() {
+    const clock = { t: 1_000_000, now() { return this.t++; } };
+    const host = new FakeRepoHost(new MapKeyValue(), clock);
+    await host.ensure('line');
+    host.commit('line', { 'src/a/x.ts': 'x', 'src/b/y.ts': 'y' }, 'seed');
+    const head = host.commit('line', { 'src/a/x.ts': 'x from claim X' }, 'Land X').after;
+    // The landing's merge commit goes to a staging branch: the head stays.
+    const staged = (files: Record<string, string>) => {
+      const merge = host.commit('line', files, 'Land b').after;
+      host.setHead('line', head);
+      return merge;
+    };
+    return { host, head, staged };
+  }
+
+  it('lets through a merge that changes only the claim\'s files', async () => {
+    const { host, head, staged } = await line();
+    const merge = staged({ 'src/b/y.ts': 'y from claim b' });
+    expect(await outsideScope(host, 'line', head, merge, ['src/b/**'])).toEqual([]);
+  });
+
+  it('stops a merge that would undo work the claim does not own, whatever its pushes were judged from', async () => {
+    // Claim b merged X's commit with "-s ours" and pushed a tree that differs
+    // from where it was forked only in src/b, so its push looked in scope. Git
+    // then merges from X's commit, and the landing reverts X's file.
+    const { host, head, staged } = await line();
+    const merge = staged({ 'src/a/x.ts': 'x', 'src/b/y.ts': 'y from claim b' });
+    const outside = await outsideScope(host, 'line', head, merge, ['src/b/**']);
+    expect(outside).toEqual(['src/a/x.ts']);
+    expect(outsideScopeOutcome(outside)).toMatchObject({ status: 'failed', log: expect.stringContaining('src/a/x.ts') });
+  });
+
+  it('judges a first landing on an empty line by every file it brings', async () => {
+    const clock = { t: 1, now() { return this.t++; } };
+    const host = new FakeRepoHost(new MapKeyValue(), clock);
+    await host.ensure('claim');
+    const sha = host.commit('claim', { 'src/b/y.ts': 'y', 'README.md': 'hi' }, 'work').after;
+    expect(await outsideScope(host, 'claim', null, sha, ['src/b/**'])).toEqual(['README.md']);
   });
 });

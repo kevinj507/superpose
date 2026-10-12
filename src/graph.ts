@@ -167,7 +167,7 @@ export class Graph extends DurableObject<Env> {
       const c = e.getClaim(claim);
       const l = e.line(line);
       if (!c.repo || !l.repo) throw new EngineError('no_repo', `no repo for ${claim} or line ${line}`);
-      return { line: l.repo, claim: c.repo, statement: c.statement };
+      return { line: l.repo, claim: c.repo, statement: c.statement, scope: c.scope };
     });
   }
 
