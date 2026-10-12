@@ -29,7 +29,7 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
       const attempt = crypto.randomUUID();
       return (job: ExecJob) => this.env.CHECKER.get(this.env.CHECKER.idFromName(`land:${graph}:${landing}:${phase}:${attempt}`)).run(job);
     };
-    // Room for placing a container (at most 2.5 minutes, see untilReady) and a
+    // Room for placing a container (at most 5 minutes, see untilReady) and a
     // 2-minute job.
     const retry = { retries: { limit: 2, delay: '20 seconds' as const, backoff: 'linear' as const }, timeout: '12 minutes' as const };
 

@@ -31,10 +31,13 @@ export class Checker extends DurableObject<Env> {
         index++;
         // Each step is its own process with its own environment, so a later
         // step never sees an earlier one's token.
-        const proc = await container.exec(['sh', '-c', step.script], { env: step.env, cwd: '/' });
         // The scripts bound their commands with `timeout`; this is the last
         // resort if the container itself hangs.
-        const out = await within((job.timeoutSeconds * 2 + 60) * 1000, 'the job', proc.output());
+        const out = await within(
+          (job.timeoutSeconds * 2 + 60) * 1000,
+          'the job',
+          container.exec(['sh', '-c', step.script], { env: step.env, cwd: '/' }).then((proc) => proc.output()),
+        );
         stdout = tail(stdout + text.decode(out.stdout), 8000);
         stderr = tail(stderr + text.decode(out.stderr), 4000);
         exitCode = out.exitCode;

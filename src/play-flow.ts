@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { tail, type ExecJob } from './core/checks';
+import { tail, type ExecJob, type ExecOutcome } from './core/checks';
 import { PLAY_FILES } from './play-bundle';
 
 // The playground: anyone can watch the whole story without tokens or a
@@ -61,25 +61,32 @@ export class PlayFlow extends WorkflowEntrypoint<Env, PlayParams> {
     // Whatever happens to the run, the graph is deleted afterwards.
     const result = await step.do(
       'plan a world and run agents on it in a container',
-      { retries: { limit: 0, delay: '1 second' }, timeout: '60 minutes' },
+      // Retried only when the container never came up, so nothing has run yet.
+      { retries: { limit: 2, delay: '10 seconds' }, timeout: '60 minutes' },
       async () => {
-        const stub = this.env.CHECKER.get(this.env.CHECKER.idFromName(`play:${graph}`));
-        const out = await stub.run({
-          steps: [
-            ...fileSteps(),
-            {
-              script: PLAY_SCRIPT,
-              env: {
-                GRAPH: graph,
-                SUPERPOSE_URL: url,
-                SUPERPOSE_ADMIN_TOKEN: this.env.ADMIN_TOKEN,
-                SUPERPOSE_AGENT_KEY: this.env.AGENT_KEY,
-                SUPERPOSE_SCRIPTED_FINDINGS: FINDINGS,
+        // A container of its own for each attempt.
+        const stub = this.env.CHECKER.get(this.env.CHECKER.idFromName(`play:${graph}:${crypto.randomUUID()}`));
+        const out = await stub
+          .run({
+            steps: [
+              ...fileSteps(),
+              {
+                script: PLAY_SCRIPT,
+                env: {
+                  GRAPH: graph,
+                  SUPERPOSE_URL: url,
+                  SUPERPOSE_ADMIN_TOKEN: this.env.ADMIN_TOKEN,
+                  SUPERPOSE_AGENT_KEY: this.env.AGENT_KEY,
+                  SUPERPOSE_SCRIPTED_FINDINGS: FINDINGS,
+                },
               },
-            },
-          ],
-          timeoutSeconds: 1200,
-        });
+            ],
+            timeoutSeconds: 1200,
+          })
+          // Anything else that goes wrong is the run's result, never a retry:
+          // the plan may already have run.
+          .catch((err): ExecOutcome => ({ exitCode: null, stdout: '', stderr: '', ms: 0, error: String(err) }));
+        if (out.error?.startsWith('container not ready')) throw new Error(out.error);
         return { exitCode: out.exitCode, log: tail(`${out.stdout}\n${out.stderr}${out.error ? `\n${out.error}` : ''}`, 3000) };
       },
     ).catch((err) => ({ exitCode: null, log: `the run failed: ${String(err)}`.slice(0, 3000) }));

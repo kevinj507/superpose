@@ -71,7 +71,7 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
     try {
       run = await step.do(
         'run the checks on the exact commit',
-        // Room for placing a container (at most 2.5 minutes, see untilReady)
+        // Room for placing a container (at most 5 minutes, see untilReady)
         // and both steps.
         { retries: { limit: 2, delay: '30 seconds', backoff: 'linear' }, timeout: `${(config.timeoutSeconds * 2 + 60) * 2 + 420} seconds` },
         async (): Promise<CheckRun> => {
