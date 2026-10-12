@@ -13,12 +13,15 @@
 // line in one commit (claims fork their line when they are taken, so it goes
 // first); then the other lines are forked from it, and the assumptions and
 // claims are created with the admin token. A claim without "line" builds on main.
+// A line entry without "from" (main, say) only labels that line with its
+// decision and option; "overlay": "<folder>" pushes that folder's files on top
+// of a newly forked line, so the two options start from different code.
 
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { Api, REPO_DIR, UsageError, canvasUrl, explainError, git, gitAuthEnv, loadEnv, serviceUrl, shortSha } from './lib.mjs';
+import { Api, REPO_DIR, UsageError, canvasUrl, explainError, git, gitAuthEnv, loadEnv, servedUrl, serviceUrl, shortSha } from './lib.mjs';
 
 const USAGE = `Usage: node runner/plan.mjs <scenario dir> --graph <gid> [--url <url>] [--env <file>] [--force]
 
@@ -47,13 +50,23 @@ function readPlan(dir) {
     if (aKeys.has(a.key)) throw new UsageError(`assumption key "${a.key}" is used twice`);
     aKeys.add(a.key);
   }
+  // A line with "from" is forked from that line (listed before it); one
+  // without "from" (main, say) only gets its decision and option labels.
   const lines = plan.lines ?? [];
   const lineNames = new Set(['main']);
   for (const l of lines) {
     if (!l.name || !/^[A-Za-z0-9_-]{1,64}$/.test(l.name)) throw new UsageError(`every line needs a name of letters, digits, - and _: ${JSON.stringify(l)}`);
-    if (lineNames.has(l.name)) throw new UsageError(`line "${l.name}" is listed twice (main exists already)`);
-    if (l.from && !lineNames.has(l.from)) throw new UsageError(`line "${l.name}" is forked from "${l.from}", which is not listed before it`);
-    lineNames.add(l.name);
+    if (l.from) {
+      if (lineNames.has(l.name)) throw new UsageError(`line "${l.name}" is created twice (main always exists)`);
+      if (!lineNames.has(l.from)) throw new UsageError(`line "${l.name}" is forked from "${l.from}", which is not listed before it`);
+      lineNames.add(l.name);
+    } else if (!lineNames.has(l.name)) {
+      throw new UsageError(`line "${l.name}" has no "from", so it must be main or a line listed before it`);
+    }
+    if (l.overlay) {
+      if (!l.from) throw new UsageError(`line "${l.name}": an overlay goes on a new line, so give it a "from"`);
+      if (!existsSync(join(dir, l.overlay))) throw new UsageError(`line "${l.name}": overlay folder ${join(dir, l.overlay)} not found`);
+    }
   }
   const cKeys = new Set(claims.map((c) => c.key));
   if (cKeys.size !== claims.length) throw new UsageError('claim keys must be unique');
@@ -85,25 +98,36 @@ function inDependencyOrder(claims) {
   return out;
 }
 
-// One commit with the seed folder, pushed to the line's main branch.
-async function seedLine(api, admin, seedDir, scenario) {
-  const access = await api.lineAccess(admin, 'main', 'write', 600);
-  if (!access.ok) throw new Error(`could not get write access to the line: ${explainError(access)}`);
+// One commit with a folder's files, pushed to a line's main branch: the seed
+// of a new line, or (onTop) an overlay on a line that already has commits.
+async function pushFolder(api, admin, line, folder, message, onTop = false) {
+  const access = await api.lineAccess(admin, line, 'write', 600);
+  if (!access.ok) throw new Error(`could not get write access to line ${line}: ${explainError(access)}`);
   const { remote, token, repo } = access.data;
+  const env = gitAuthEnv(token);
   const tmp = mkdtempSync(join(tmpdir(), 'superpose-seed-'));
   try {
-    git(tmp, ['init', '--quiet', '-b', 'main']);
-    cpSync(seedDir, tmp, { recursive: true });
+    if (onTop) {
+      rmSync(tmp, { recursive: true, force: true });
+      const clone = git(tmpdir(), ['clone', '--quiet', remote, tmp], { env, check: false });
+      if (clone.code !== 0) throw new Error(`could not clone ${repo}: ${clone.stderr.trim().split('\n').at(-1)}`);
+    } else {
+      git(tmp, ['init', '--quiet', '-b', 'main']);
+    }
+    cpSync(folder, tmp, { recursive: true, force: true });
     git(tmp, ['add', '-A']);
     const identity = git(tmp, ['config', 'user.email'], { check: false }).stdout.trim()
       ? []
       : ['-c', 'user.name=Superpose planner', '-c', 'user.email=planner@superpose.invalid'];
-    git(tmp, [...identity, 'commit', '--quiet', '-m', `Start the ${scenario} project`]);
+    git(tmp, [...identity, 'commit', '--quiet', '-m', message]);
     const sha = git(tmp, ['rev-parse', 'HEAD']).stdout.trim();
-    const files = git(tmp, ['ls-files']).stdout.split('\n').filter(Boolean).length;
-    const push = git(tmp, ['push', '--quiet', remote, 'HEAD:refs/heads/main'], { env: gitAuthEnv(token), check: false });
+    const files = onTop
+      ? git(tmp, ['diff', '--name-only', 'HEAD~1', 'HEAD']).stdout.split('\n').filter(Boolean).length
+      : git(tmp, ['ls-files']).stdout.split('\n').filter(Boolean).length;
+    const push = git(tmp, ['push', '--quiet', remote, 'HEAD:refs/heads/main'], { env, check: false });
     if (push.code !== 0) {
-      throw new Error(`could not push the seed to ${repo} (is the line already seeded?): ${push.stderr.trim().split('\n').at(-1)}`);
+      const hint = onTop ? '' : ' (is the line already seeded?)';
+      throw new Error(`could not push to ${repo}${hint}: ${push.stderr.trim().split('\n').at(-1)}`);
     }
     return { repo, sha, files };
   } finally {
@@ -144,18 +168,29 @@ async function main() {
 
     const seedDir = join(scenarioDir, 'seed');
     if (existsSync(seedDir)) {
-      const seeded = await seedLine(api, admin, seedDir, plan.name);
+      const seeded = await pushFolder(api, admin, 'main', seedDir, `Start the ${plan.name} project`);
       console.log(`Seeded the main line (${seeded.repo}) with ${seeded.files} files at ${shortSha(seeded.sha)}.`);
     } else {
       console.log('No seed/ folder: the main line starts empty.');
     }
 
     for (const l of plan.lines) {
-      const from = l.from || 'main';
-      const res = await api.createLine(admin, l.name, { from, ...(l.decision ? { decision: l.decision } : {}), ...(l.option ? { option: l.option } : {}) });
+      const labels = { ...(l.decision ? { decision: l.decision } : {}), ...(l.option ? { option: l.option } : {}) };
+      const what = [l.decision && `decision “${l.decision}”`, l.option && `option “${l.option}”`].filter(Boolean).join(', ');
+      if (!l.from) {
+        const res = await api.createLine(admin, l.name, labels);
+        if (!res.ok) throw new Error(`could not label line "${l.name}": ${explainError(res)}`);
+        console.log(`  line       ${l.name}: ${what || 'no labels'}`);
+        continue;
+      }
+      const res = await api.createLine(admin, l.name, { from: l.from, ...labels });
       if (!res.ok) throw new Error(`could not create line "${l.name}": ${explainError(res)}`);
-      const what = [l.decision && `decision "${l.decision}"`, l.option && `option "${l.option}"`].filter(Boolean).join(', ');
-      console.log(`  line       ${l.name}: forked from ${from}${what ? ` (${what})` : ''}`);
+      let overlaid = '';
+      if (l.overlay) {
+        const pushed = await pushFolder(api, admin, l.name, join(scenarioDir, l.overlay), `Build the ${l.name} line: ${l.option ?? l.overlay}`, true);
+        overlaid = `, with ${l.overlay}/ on top (${pushed.files} files, ${shortSha(pushed.sha)})`;
+      }
+      console.log(`  line       ${l.name}: forked from ${l.from}${what ? ` (${what})` : ''}${overlaid}`);
     }
 
     const ids = { assumptions: {}, claims: {} };
@@ -175,20 +210,25 @@ async function main() {
       });
       if (!res.ok) throw new Error(`could not create claim "${c.key}": ${explainError(res)}`);
       ids.claims[c.key] = res.data.id;
-      const deps = [...(c.restsOn ?? []).map((k) => ids.assumptions[k]), ...(c.requires ?? []).map((k) => ids.claims[k])];
+      const rests = (c.restsOn ?? []).map((k) => ids.assumptions[k]);
+      const builds = (c.requires ?? []).map((k) => ids.claims[k]);
       console.log(
-        `  claim      ${res.data.id.padEnd(4)} ${c.key}: scope ${c.scope.join(', ')}${deps.length ? `; rests on ${deps.join(', ')}` : ''}` +
+        `  claim      ${res.data.id.padEnd(4)} ${c.key}: scope ${c.scope.join(', ')}` +
+          (rests.length ? `; rests on ${rests.join(', ')}` : '') +
+          (builds.length ? `; builds on ${builds.join(', ')}` : '') +
           (c.line && c.line !== 'main' ? `; line ${c.line}` : ''),
       );
     }
     const runsDir = join(resolve(values.runs ?? join(REPO_DIR, 'runs')), graph);
     mkdirSync(runsDir, { recursive: true });
     writeFileSync(join(runsDir, 'plan-ids.json'), JSON.stringify({ graph, url, scenario: plan.name, ...ids }, null, 2) + '\n');
+    const lineCount = new Set(['main', ...plan.lines.map((l) => l.name)]).size;
     console.log(
       `\nGraph ${graph} is ready: ${plan.assumptions.length} assumptions, ${plan.claims.length} claims` +
-        `${plan.lines.length ? `, ${plan.lines.length + 1} lines` : ''}.`,
+        `${lineCount > 1 ? `, ${lineCount} lines` : ''}.`,
     );
     console.log(`Canvas: ${canvasUrl(url, graph)}`);
+    console.log(`Served: ${servedUrl(url, graph)}`);
     console.log(`Start agents: node runner/run.mjs --graph ${graph} --agents 3`);
     return 0;
   } catch (err) {

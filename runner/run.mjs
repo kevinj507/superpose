@@ -28,6 +28,7 @@ import {
   agentEnv,
   atomicWrite,
   canvasUrl,
+  servedUrl,
   clearMarker,
   describeNotice,
   explainError,
@@ -308,7 +309,7 @@ class Runner {
           (r.transcript ? `  ${relative(process.cwd(), r.transcript)}` : ''),
       );
     }
-    lines.push(`  Canvas: ${canvasUrl(this.opts.url, this.opts.graph)}`);
+    lines.push(`  Canvas: ${canvasUrl(this.opts.url, this.opts.graph)}`, `  Served: ${servedUrl(this.opts.url, this.opts.graph)}`);
     process.stdout.write(lines.join('\n') + '\n');
     writeFileSync(join(this.opts.runsDir, 'summary.json'), JSON.stringify({ graph: this.opts.graph, results: rows }, null, 2) + '\n');
   }

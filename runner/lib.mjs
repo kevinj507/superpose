@@ -37,6 +37,11 @@ export function canvasUrl(url, graph) {
   return `${url}/g/${encodeURIComponent(graph)}`;
 }
 
+// The served reality: the project's code as the served line has it, live.
+export function servedUrl(url, graph) {
+  return `${url}/served/${encodeURIComponent(graph)}/`;
+}
+
 export class UsageError extends Error {}
 
 // The environment an agent runs with: everything except the planner's and the

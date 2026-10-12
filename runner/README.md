@@ -58,6 +58,6 @@ When a finding is verified, exactly the claims resting on that assumption go sta
 }
 ```
 
-`lines` and `line` are optional: one decision built two ways. A claim that `requires` another is ready once that one has landed, so its copy contains that work.
+`lines` and `line` are optional: one decision built two ways. A line entry without `from` only labels a line (main, say); `"overlay": "<folder>"` pushes that folder on top of a new line. A claim that `requires` another is ready once that one has landed, so its copy contains that work. `scenarios/world` is a larger example: 18 claims on two lines.
 
 Runner tests: `node --test runner/lib.test.mjs`.
