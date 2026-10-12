@@ -218,6 +218,20 @@ export class Graph extends DurableObject<Env> {
     }
   }
 
+  // The playground's lobby (used on one instance only): the run going now,
+  // or a new one if the last started more than 20 minutes ago, so everyone
+  // who asks watches the same run.
+  async playLobby(url: string): Promise<{ graph: string; started: boolean }> {
+    const kv = this.ctx.storage.kv;
+    const current = kv.get<{ graph: string; at: number }>('play');
+    if (current && Date.now() - current.at < 20 * 60_000) return { graph: current.graph, started: false };
+    if (!this.env.PLAYS) throw new Error('no playground Workflow bound');
+    const graph = `play-${Date.now().toString(36)}`;
+    await this.env.PLAYS.create({ params: { graph, url } });
+    kv.put('play', { graph, at: Date.now() });
+    return { graph, started: true };
+  }
+
   // Retry landings that could not be started.
   async alarm() {
     const graph = this.ctx.storage.kv.get<string>('graph');

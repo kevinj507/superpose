@@ -40,7 +40,9 @@
   "workflows": [
     { "binding": "PUSHES", "name": "superpose-pushes", "class_name": "PushFlow" },
     // One landing at a time per line, started by the graph's Durable Object.
-    { "binding": "LANDINGS", "name": "superpose-landings", "class_name": "LandFlow" }
+    { "binding": "LANDINGS", "name": "superpose-landings", "class_name": "LandFlow" },
+    // The playground: plans a world and runs scripted agents on it in a container.
+    { "binding": "PLAYS", "name": "superpose-plays", "class_name": "PlayFlow" }
   ],
   "triggers": {
     "events": [

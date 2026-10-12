@@ -54,3 +54,13 @@ describe('the container scripts', () => {
     expect(RUN_SCRIPT).not.toMatch(/TOKEN/);
   });
 });
+
+describe('the playground bundle', () => {
+  it('matches the runner and the world scenario on disk (run npm run build:play after changing them)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { PLAY_FILES } = await import('../src/play-bundle');
+    const root = new URL('..', import.meta.url).pathname;
+    for (const [path, text] of Object.entries(PLAY_FILES)) expect(readFileSync(join(root, path), 'utf8'), path).toBe(text);
+    expect(Object.keys(PLAY_FILES)).toContain('runner/play-director.mjs');
+  });
+});

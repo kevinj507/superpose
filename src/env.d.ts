@@ -5,6 +5,7 @@ declare namespace Cloudflare {
     REPO_HOST?: string; // 'fake' for tests and local development
     PUSHES?: Workflow;
     LANDINGS?: Workflow<import('./land-flow').LandParams>;
+    PLAYS?: Workflow<import('./play-flow').PlayParams>;
     CHECKER: DurableObjectNamespace<import('./checker').Checker>;
     ADMIN_TOKEN: string;
     AGENT_KEY: string;

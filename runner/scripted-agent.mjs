@@ -16,6 +16,10 @@
 //                             a change to it with the local hook bypassed, then take it
 //                             back, so the platform's own scope check can be seen (and,
 //                             if the path is in another claim's scope, its scope.touched)
+//   SUPERPOSE_SCRIPTED_FINDINGS  JSON list of {when, contradicts, statement}: a claim whose
+//                             statement contains `when` files a finding against the assumption
+//                             it rests on whose statement contains `contradicts`, the way a
+//                             real agent reports what it discovered (used by the playground)
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
@@ -104,6 +108,28 @@ if (strayEnv) {
     git(dir, ['commit', '--quiet', '-m', `Take back the stray change on ${claim.claim}`]);
     r = push();
     say(r.code === 0 ? 'Took the stray change back' : `Could not push the take-back:\n${r.stderr.trim()}`);
+  }
+}
+
+// Discover something, as scripted: a finding against an assumption this
+// claim rests on.
+const rules = (() => {
+  try {
+    return JSON.parse(process.env.SUPERPOSE_SCRIPTED_FINDINGS || '[]');
+  } catch {
+    return [];
+  }
+})();
+const rule = rules.find((r) => typeof r.when === 'string' && claim.statement.includes(r.when));
+if (rule) {
+  try {
+    const res = await fetch(`${claim.url}/api/graphs/${claim.graph}/snapshot`);
+    const snap = await res.json();
+    const mine = new Set(snap.edges.filter((e) => e.target === claim.claim && e.purpose === 'required for').map((e) => e.source));
+    const target = snap.nodes.find((n) => n.kind === 'assumption' && mine.has(n.id) && n.statement.includes(rule.contradicts));
+    if (target) say(superpose(['finding', '--contradicts', target.id, rule.statement]).out);
+  } catch (err) {
+    say(`Could not file the scripted finding: ${err}`);
   }
 }
 

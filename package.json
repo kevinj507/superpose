@@ -7,7 +7,8 @@
   "description": "Coordination for many concurrent coding agents on Cloudflare Workers and Artifacts",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:play": "node scripts/build-play.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.4.0",
