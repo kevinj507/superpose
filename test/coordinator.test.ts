@@ -42,10 +42,10 @@ describe('a claim gets its own repo and a token that lives with its lease', () =
   it('the token can push to the claim\'s repo only, and only until the lease would end', async () => {
     const w = await seeded();
     const grant = await w.coord.claim(w.claim.id, 'agent-1');
-    expect(grant.git!.expiresAt).toBe(w.clock.t + LEASE);
+    expect(grant.git!.expiresAt).toBe(w.clock.t + LEASE - 1000);
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(true);
     expect(w.host.canPush('demo.line.main', grant.git!.token)).toBe(false);
-    w.clock.t += LEASE;
+    w.clock.t += LEASE - 1000;
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(false);
   });
 
@@ -55,7 +55,7 @@ describe('a claim gets its own repo and a token that lives with its lease', () =
     w.clock.t += LEASE / 2;
     const renewed = await w.coord.renew(w.claim.id, grant.token);
     expect(renewed.ok).toBe(true);
-    expect(renewed.git!.expiresAt).toBe(renewed.expiresAt);
+    expect(renewed.git!.expiresAt).toBe(renewed.expiresAt! - 1000);
     expect(w.host.canPush('demo.claim.c1', renewed.git!.token)).toBe(true);
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(false);
   });

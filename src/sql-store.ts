@@ -1,5 +1,5 @@
 import type { Store } from './core/store';
-import type { Edge, EdgePurpose, GraphEvent, GraphNode, PushRecord } from './core/types';
+import type { Edge, EdgePurpose, GraphEvent, GraphNode, Line, PushRecord } from './core/types';
 
 // The engine's Store on a Durable Object's SQLite database. SQLite calls in a
 // Durable Object are synchronous, so the engine runs unchanged.
@@ -17,6 +17,7 @@ export class SqlStore implements Store {
     sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
       claim TEXT NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL, json TEXT NOT NULL,
       PRIMARY KEY (claim, sha))`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS lines (name TEXT PRIMARY KEY, json TEXT NOT NULL)`);
   }
 
   getNode(id: string): GraphNode | undefined {
@@ -142,6 +143,26 @@ export class SqlStore implements Store {
       ? this.sql.exec<{ json: string }>(`SELECT json FROM ledger WHERE claim = ? ORDER BY at, rowid`, claim)
       : this.sql.exec<{ json: string }>(`SELECT json FROM ledger ORDER BY at, rowid`);
     return rows.toArray().map((r) => JSON.parse(r.json) as PushRecord);
+  }
+
+  getLine(name: string): Line | undefined {
+    const row = this.sql.exec<{ json: string }>(`SELECT json FROM lines WHERE name = ?`, name).toArray()[0];
+    return row ? (JSON.parse(row.json) as Line) : undefined;
+  }
+
+  putLine(line: Line): void {
+    this.sql.exec(
+      `INSERT INTO lines (name, json) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET json = excluded.json`,
+      line.name,
+      JSON.stringify(line),
+    );
+  }
+
+  lines(): Line[] {
+    return this.sql
+      .exec<{ json: string }>(`SELECT json FROM lines ORDER BY rowid`)
+      .toArray()
+      .map((r) => JSON.parse(r.json) as Line);
   }
 
   private edgeRows(query: string, ...bindings: string[]): Edge[] {

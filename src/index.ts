@@ -2,6 +2,7 @@ import type { Result } from './graph';
 
 export { Graph } from './graph';
 export { Checker } from './checker';
+export { LandFlow } from './land-flow';
 export { PushFlow } from './push-flow';
 
 // HTTP API in front of the per-graph Durable Objects.
@@ -70,6 +71,11 @@ route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
   }),
 );
 route('POST', '/api/graphs/:gid/claims/:id/land', 'admin', ({ graph, params }) => graph.land(params.id!));
+route('POST', '/api/graphs/:gid/claims/:id/reopen', 'admin', ({ graph, params }) => graph.reopen(params.id!));
+route('POST', '/api/graphs/:gid/landings', 'admin', async ({ graph, params }) => {
+  await graph.pumpLandings(params.gid!);
+  return { ok: true, value: null };
+});
 route('POST', '/api/graphs/:gid/findings/:fid/verify', 'admin', ({ graph, params }) => graph.verifyFinding(params.fid!));
 route('POST', '/api/graphs/:gid/findings/:fid/refute', 'admin', ({ graph, params }) => graph.refuteFinding(params.fid!));
 

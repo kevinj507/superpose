@@ -41,7 +41,7 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
     const host = new ArtifactsHost(this.env.ARTIFACTS!);
     // Step results must be plain data, so only the verdict comes back.
     const recordCheck = async (check: CheckRun): Promise<string | null> => {
-      const r = await stub.recordCheck(claim, record.sha, check);
+      const r = await stub.recordCheck(graph, claim, record.sha, check);
       return r.ok ? r.value.verdict : null;
     };
 

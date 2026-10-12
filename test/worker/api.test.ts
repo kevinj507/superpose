@@ -69,6 +69,9 @@ describe('the API in front of the graph', () => {
     const p = await project();
     const finder = p.onB[0].id;
 
+    // Some work on a claim that will turn out to rest on a false assumption.
+    const early = await pushTo(p.gid, p.onA[1].id, p.tokens[p.onA[1].id]!, { 'src/d2/a.ts': 'early' });
+
     const filed = await api('POST', `${p.g}/findings`, p.tokens[finder], {
       finder, statement: 'The date library drops time zones', effect: 'contradicts', targets: [p.A.id],
     });
@@ -79,8 +82,11 @@ describe('the API in front of the graph', () => {
     const quiet = await api('POST', `${p.g}/claims/${p.onA[1].id}/renew`, p.tokens[p.onA[1].id]);
     expect(quiet.data).toMatchObject({ ok: true, notices: [] });
 
+    // d1 has landed (it finished, so the builds-on claim could start): it is
+    // reported as served work at risk, not marked stale.
     const impact = await api('GET', `${p.g}/findings/${fid}/impact`);
-    expect(impact.data.affected.sort()).toEqual([p.onA[0].id, p.onA[1].id, p.onA[2].id, p.builtOn.id].sort());
+    expect(impact.data.affected.sort()).toEqual([p.onA[1].id, p.onA[2].id, p.builtOn.id].sort());
+    expect(impact.data.landedAtRisk).toEqual([p.onA[0].id]);
     expect(impact.data.cost).toBe(1);
 
     expect((await api('POST', `${p.g}/findings/${fid}/verify`, ADMIN)).status).toBe(200);
@@ -108,8 +114,10 @@ describe('the API in front of the graph', () => {
     });
 
     const snap = await api('GET', `${p.g}/snapshot`);
-    const d1 = snap.data.nodes.find((n: any) => n.id === p.onA[0].id);
-    expect(d1).toMatchObject({ status: 'stale', kept: [{ sha: p.d1sha }] });
+    const d2 = snap.data.nodes.find((n: any) => n.id === p.onA[1].id);
+    expect(d2.kept).toEqual([expect.objectContaining({ sha: early })]);
+    expect(snap.data.nodes.find((n: any) => n.id === p.onA[0].id)).toMatchObject({ status: 'landed' });
+    expect(snap.data.events.some((e: any) => e.type === 'reality.at_risk' && e.claims.includes(p.onA[0].id))).toBe(true);
   });
 });
 

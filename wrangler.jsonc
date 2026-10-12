@@ -29,7 +29,11 @@
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "superpose" }],
   // Every push to any repo in the namespace starts a PushFlow, which reads the
   // commit and records the verdict on the claim (the event has no file list).
-  "workflows": [{ "binding": "PUSHES", "name": "superpose-pushes", "class_name": "PushFlow" }],
+  "workflows": [
+    { "binding": "PUSHES", "name": "superpose-pushes", "class_name": "PushFlow" },
+    // One landing at a time per line, started by the graph's Durable Object.
+    { "binding": "LANDINGS", "name": "superpose-landings", "class_name": "LandFlow" }
+  ],
   "triggers": {
     "events": [
       {

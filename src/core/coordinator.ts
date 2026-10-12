@@ -49,7 +49,12 @@ export class Coordinator {
   // The repo for a line, made empty if it does not exist yet. An admin seeds a
   // new line by pushing to it with a token from `lineAccess`.
   async ensureLine(line: string): Promise<RepoRef & { head?: string }> {
-    return this.host.ensure(lineRepoName(this.opts.graph, line));
+    const repo = await this.host.ensure(lineRepoName(this.opts.graph, line));
+    this.tx((e) => {
+      const known = e.line(line);
+      if (!known.repo) e.saveLine({ ...known, repo: { name: repo.name, remote: repo.remote } });
+    });
+    return repo;
   }
 
   async lineAccess(line: string, scope: 'read' | 'write', ttlSeconds: number): Promise<GitAccess & { repo: string }> {
@@ -159,10 +164,11 @@ export class Coordinator {
   // ---- internals -----------------------------------------------------------
 
   // The token never outlives the lease: its lifetime is the lease's remaining
-  // time in whole seconds (the host's minimum is 60).
+  // time in whole seconds, less one for the time minting takes (the host's
+  // minimum is 60).
   private async grantGit(id: string, leaseToken: string, leaseEnds: number, repo: RepoRef): Promise<GitAccess> {
     const now = this.opts.now?.() ?? Date.now();
-    const ttl = Math.max(60, Math.floor((leaseEnds - now) / 1000));
+    const ttl = Math.max(60, Math.floor((leaseEnds - now) / 1000) - 1);
     const t = await this.host.mintToken(repo.name, 'write', ttl);
     let replaced: string | undefined;
     try {
