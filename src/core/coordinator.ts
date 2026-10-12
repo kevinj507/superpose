@@ -2,6 +2,7 @@ import { EngineError, type Engine, type RenewResult } from './engine';
 import {
   changedPaths,
   claimRepoName,
+  commitsSince,
   lineRepoName,
   trailerClaims,
   UnknownCommitError,
@@ -180,7 +181,10 @@ export class Coordinator {
       if (err instanceof UnknownCommitError) throw new EngineError('unknown_commit', err.message);
       throw err;
     }
-    const unattributed = (push.commits ?? []).filter((m) => !trailerClaims(m.message).includes(id)).map((m) => m.id);
+    // Which commits name their claim, read from the repo (not from the event,
+    // so the agent's own report gets the same check).
+    const commits = await commitsSince(this.host, c.repo.name, c.baseSha ?? null, push.sha);
+    const unattributed = commits.filter((m) => !trailerClaims(m.message).includes(id)).map((m) => m.sha);
     return this.tx((e) =>
       e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths, isHead: head === push.sha, seenAt, unattributed }),
     );
@@ -206,14 +210,14 @@ export class Coordinator {
     const now = this.opts.now?.() ?? Date.now();
     const ttl = Math.max(60, Math.floor((leaseEnds - now) / 1000) - 1);
     const t = await this.host.mintToken(repo.name, 'write', ttl);
-    let replaced: string | undefined;
     try {
-      replaced = this.tx((e) => e.attachGit(id, leaseToken, { tokenId: t.id, expiresAt: t.expiresAt }));
+      // The token it replaces is left to expire on its own, at the end of the
+      // lease it was minted for: revoking it would break a push in flight.
+      this.tx((e) => e.attachGit(id, leaseToken, { tokenId: t.id, expiresAt: t.expiresAt }));
     } catch (err) {
       await this.revokeQuietly(repo.name, t.id);
       throw err;
     }
-    if (replaced) await this.revokeQuietly(repo.name, replaced);
     return { remote: repo.remote, token: t.secret, expiresAt: t.expiresAt };
   }
 

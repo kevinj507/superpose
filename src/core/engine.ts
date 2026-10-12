@@ -195,6 +195,12 @@ export class Engine {
       cursor: this.latestSeq(),
     };
     const status = c.status === 'stale' ? 'stale' : 'claimed';
+    if (status === 'stale') {
+      // Whoever takes over a stale claim hears why it is stale, at its first
+      // renewal, like the agent that held it before.
+      const why = this.store.eventsSince(0).filter((e) => e.type === 'claim.stale' && e.claims.includes(id)).at(-1);
+      if (why) lease.cursor = why.seq - 1;
+    }
     this.store.putNode({ ...c, status, lease });
     // The previous holder's git token, if any, is revoked by the caller.
     return { token: lease.token, expiresAt: lease.expiresAt, status, revoke: c.lease?.git?.tokenId };

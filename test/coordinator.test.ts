@@ -49,7 +49,7 @@ describe('a claim gets its own repo and a token that lives with its lease', () =
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(false);
   });
 
-  it('renewing the lease renews the token and retires the old one', async () => {
+  it('renewing the lease renews the token; the old one lapses at the end of the lease it was minted for', async () => {
     const w = await seeded();
     const grant = await w.coord.claim(w.claim.id, 'agent-1');
     w.clock.t += LEASE / 2;
@@ -57,7 +57,11 @@ describe('a claim gets its own repo and a token that lives with its lease', () =
     expect(renewed.ok).toBe(true);
     expect(renewed.git!.expiresAt).toBe(renewed.expiresAt! - 1000);
     expect(w.host.canPush('demo.claim.c1', renewed.git!.token)).toBe(true);
+    // Not revoked, so a push in flight across the renewal still goes through.
+    expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(true);
+    w.clock.t += LEASE / 2;
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(false);
+    expect(w.host.canPush('demo.claim.c1', renewed.git!.token)).toBe(true);
   });
 
   it('a stale claim\'s token is not renewed and lapses with the lease', async () => {
@@ -236,5 +240,22 @@ describe('a refused commit is judged again when it comes up again', () => {
     expect(await w.coord.inspectPush(w.claim.id, { sha, ref: 'refs/heads/wip', before: null })).toMatchObject({ accepted: false, reason: 'other-branch' });
     expect(await w.coord.inspectPush(w.claim.id, { sha, ref: 'refs/heads/main', before: null })).toMatchObject({ accepted: true, ref: 'refs/heads/main' });
     expect(w.engine.getClaim(w.claim.id).headSha).toBe(sha);
+  });
+});
+
+describe('taking over a stale claim', () => {
+  it('the new holder hears why it is stale at its first renewal', async () => {
+    const w = await seeded();
+    const A = w.engine.addAssumption('counters can live in KV');
+    const onA = w.engine.addClaim({ statement: 'count', scope: ['src/count/**'], restsOn: [A.id] });
+    const finder = await w.coord.claim(w.claim.id, 'finder');
+    await w.coord.claim(onA.id, 'first');
+    const { finding } = w.engine.fileFinding(w.claim.id, finder.token, { statement: 'KV drifts', effect: 'contradicts', targets: [A.id] });
+    w.engine.verifyFinding(finding.id);
+    w.clock.t += LEASE + 1;
+    const taken = await w.coord.claim(onA.id, 'second');
+    const renewal = await w.coord.renew(onA.id, taken.token);
+    expect(renewal).toMatchObject({ ok: false, reason: 'stale' });
+    expect(renewal.notices).toEqual([expect.objectContaining({ type: 'claim.stale', data: expect.objectContaining({ finding: finding.id }) })]);
   });
 });

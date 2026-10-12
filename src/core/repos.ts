@@ -16,6 +16,8 @@ export interface RepoHost {
   readHead(repo: string): Promise<string | null>;
   // A file's text at a commit, or null if it does not exist there.
   readFile(repo: string, ref: string, path: string): Promise<string | null>;
+  // Delete a repo (when its graph is deleted).
+  remove(repo: string): Promise<void>;
 }
 
 export interface HostRepo extends RepoRef {
@@ -74,6 +76,20 @@ export function trailerClaims(message: string): string[] {
   const out: string[] = [];
   for (const m of message.matchAll(/^Superpose-Claim:[ \t]*(.+)$/gim)) {
     out.push(...m[1]!.split(/[\s,]+/).filter(Boolean));
+  }
+  return out;
+}
+
+// The commits from `base` (exclusive) to `head`, newest first, following first
+// parents, at most `limit` of them.
+export async function commitsSince(host: RepoHost, repo: string, base: string | null, head: string, limit = 50): Promise<HostCommit[]> {
+  const out: HostCommit[] = [];
+  let cur: string | undefined = head;
+  while (cur && cur !== base && out.length < limit) {
+    const commit = await host.readCommit(repo, cur);
+    if (!commit) break;
+    out.push(commit);
+    cur = commit.parents[0];
   }
   return out;
 }

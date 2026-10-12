@@ -100,3 +100,17 @@ describe('landing', () => {
     expect((await api('GET', `${g}/ready`)).data.map((c: any) => c.id)).toContain(b.id);
   });
 });
+
+describe('deleting a graph', () => {
+  it('removes its repos and everything stored, and the graph id starts fresh', async () => {
+    const { gid, g } = await graphWithLine();
+    const a = (await api('POST', `${g}/claims`, ADMIN, { statement: 'x', scope: ['src/x/**'] })).data;
+    const w = await claimAndWork(gid, a.id, { 'src/x/a.ts': 'x' });
+    expect(await inGraph(gid, (_, h) => h.exists(w.grant.repo.name))).toBe(true);
+    expect((await api('DELETE', g, AGENT)).status).toBe(401);
+    expect((await api('DELETE', g, ADMIN)).data).toEqual({ repos: 2 });
+    expect(await inGraph(gid, (_, h) => [h.exists(w.grant.repo.name), h.exists(`${gid}.line.main`)])).toEqual([false, false]);
+    expect((await api('GET', `${g}/snapshot`)).data).toMatchObject({ nodes: [], lines: [] });
+    expect((await api('POST', `${g}/claims`, ADMIN, { statement: 'again', scope: ['**'] })).data.id).toBe('c1');
+  });
+});

@@ -60,6 +60,7 @@ route('GET', '/api/graphs/:gid/snapshot', 'public', ({ graph }) => graph.snapsho
 route('GET', '/api/graphs/:gid/ready', 'public', ({ graph }) => graph.ready());
 route('GET', '/api/graphs/:gid/findings/:fid/impact', 'public', ({ graph, params }) => graph.impactOf(params.fid!));
 
+route('DELETE', '/api/graphs/:gid', 'admin', ({ graph, params }) => graph.destroy(params.gid!));
 route('POST', '/api/graphs/:gid/assumptions', 'admin', ({ graph, body }) => graph.addAssumption(str(body.statement)));
 route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
   graph.addClaim({

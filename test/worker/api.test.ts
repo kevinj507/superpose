@@ -195,8 +195,9 @@ describe('repos and git tokens over the API', () => {
 
     const renewed = (await api('POST', `${g}/claims/${c.id}/renew`, grant.token)).data;
     expect(renewed.ok).toBe(true);
+    // The old token is left to lapse with the lease it was minted for.
     expect(await host(gid, (h) => [h.canPush(grant.repo.name, grant.git.token), h.canPush(grant.repo.name, renewed.git.token)]))
-      .toEqual([false, true]);
+      .toEqual([true, true]);
 
     const snapshot = JSON.stringify((await api('GET', `${g}/snapshot`)).data);
     expect(snapshot).not.toContain(grant.git.token);

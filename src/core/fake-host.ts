@@ -8,6 +8,7 @@ import type { HostCommit, HostRepo, HostToken, HostTreeEntry, RepoHost } from '.
 export interface KeyValue {
   get<T>(key: string): T | undefined;
   put<T>(key: string, value: T): void;
+  delete(key: string): boolean;
 }
 
 export class MapKeyValue implements KeyValue {
@@ -18,6 +19,9 @@ export class MapKeyValue implements KeyValue {
   }
   put<T>(key: string, value: T) {
     this.map.set(key, structuredClone(value));
+  }
+  delete(key: string) {
+    return this.map.delete(key);
   }
 }
 
@@ -103,6 +107,11 @@ export class FakeRepoHost implements RepoHost {
   async readTree(repo: string, tree: string): Promise<HostTreeEntry[] | null> {
     if (!this.repo(repo)) throw hostError('NOT_FOUND', `no repo ${repo}`);
     return this.kv.get<HostTreeEntry[]>(`tree:${tree}`) ?? null;
+  }
+
+  async remove(repo: string): Promise<void> {
+    this.calls.push(`remove ${repo}`);
+    this.kv.delete(`repo:${repo}`);
   }
 
   async readFile(repo: string, ref: string, path: string): Promise<string | null> {

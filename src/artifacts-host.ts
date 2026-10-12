@@ -51,6 +51,14 @@ export class ArtifactsHost implements RepoHost {
     return entries.map((e) => ({ name: e.name, type: e.type === 'tree' ? 'tree' : 'blob', hash: e.hash }));
   }
 
+  async remove(repo: string): Promise<void> {
+    try {
+      await this.artifacts.delete(repo);
+    } catch (err) {
+      if (codeOf(err) !== 'NOT_FOUND') throw err;
+    }
+  }
+
   async readFile(repo: string, ref: string, path: string): Promise<string | null> {
     const blob = await this.withRepo(repo, (r) => r.readFile({ ref, path }));
     return blob ? blob.text() : null;

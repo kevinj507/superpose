@@ -281,6 +281,22 @@ export class Graph extends DurableObject<Env> {
     return this.run((e) => e.expireHedges());
   }
 
+  // Delete the whole graph: its repos on the git host, then everything stored.
+  async destroy(graph: string): Promise<Result<{ repos: number }>> {
+    const names = new Set<string>([lineRepoName(graph, 'main')]);
+    for (const l of this.engine.lines()) if (l.repo) names.add(l.repo.name);
+    for (const c of this.engine.claims()) if (c.repo) names.add(c.repo.name);
+    for (const name of names) await this.repoHost.remove(name).catch(() => {});
+    await this.ctx.storage.deleteAll();
+    this.store = new SqlStore(this.ctx.storage.sql);
+    this.engine = new Engine(this.store, { now: () => Date.now() }, {
+      leaseMs: this.leaseMs,
+      hedgeMs: Number(this.env.HEDGE_MS ?? DEFAULT_HEDGE_MS),
+      dependencyGate: 'landed',
+    });
+    return { ok: true, value: { repos: names.size } };
+  }
+
   // Everything the canvas needs. Lease tokens are secrets and never leave.
   snapshot() {
     return this.run((e) => ({
@@ -306,5 +322,6 @@ function missingHost(): RepoHost {
     readTree: fail,
     readHead: fail,
     readFile: fail,
+    remove: fail,
   };
 }
