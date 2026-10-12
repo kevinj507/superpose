@@ -258,6 +258,7 @@ async function finding({ dir, claim, api }, values, positionals) {
 
 async function replan({ dir, claim, api }, values) {
   refuseIfOver(dir, claim.claim);
+  const wasStale = hasMarker(dir, 'STALE');
   const index = await snapshotIndex(api);
   const ctx = index ? claimContext(index, claim.claim) : null;
   let restsOn;
@@ -321,8 +322,10 @@ async function replan({ dir, claim, api }, values) {
       fetched +
       `It rests on: ${rests}${kept ? ' (the assumptions that still hold; pass --rests-on to choose)' : ''}.\n` +
       `Scope: ${next.scope.join(', ')}.\n` +
-      'Pushes are accepted again and the runner renews the lease as before. CLAIM.md is updated.\n' +
-      'Now rework the code to match the new plan, commit, and push.',
+      (wasStale
+        ? 'Pushes are accepted again and the runner renews the lease as before. CLAIM.md is updated.\n' +
+          'Now rework the code to match the new plan, commit, and push.'
+        : 'The new plan is in force and CLAIM.md is updated. Carry on with the work.'),
   );
 }
 
