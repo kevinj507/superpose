@@ -4,7 +4,13 @@
 
 Git converges everything into one tree because its collaborators were human. Superpose keeps a graph. The unit of work is a **claim**: a frozen statement of what will be true when the work is done, with a declared scope, a base commit, and the assumptions it rests on. Commits are evidence for a claim, not the unit of meaning. Trees, boards and the served build are views over the graph.
 
-**Live:** https://superpose.kevinj507.workers.dev. Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<graph>/`.
+**Live:** https://superpose.kevinj507.workers.dev. Press **Watch agents build one now**: it starts a run on Cloudflare (or joins the one already going) and opens its live graph. No account, token or machine needed.
+- **What runs:** a container plans a procedural world on a new graph, and scripted agents build it two ways.
+- **The finding:** one agent reports that a shared random stream couples the modules.
+- **The decisions:** a director plays the human, verifying that finding and switching the served reality to the line that does not rest on it.
+- **Timing:** about 3 minutes from start to switch. The graph is deleted two hours later.
+
+Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<graph>/`.
 
 **A real run to look at:** [`/g/world-rehearsal-0212`](https://superpose.kevinj507.workers.dev/g/world-rehearsal-0212). Two Claude Code agents built a procedural world two ways: one random stream shared by every module, or one stream per module.
 - **Discovered unprompted:** working on stable share links, one agent found that the shared stream couples modules, and filed it as a finding with evidence.
@@ -42,7 +48,7 @@ Git converges everything into one tree because its collaborators were human. Sup
 | **Durable Objects** (SQLite) | One per project graph (`src/graph.ts`): claims, leases, findings, the verdict ledger, lines. The single writer for coordination state and for landings |
 | **Artifacts** | A repo per line (`<graph>.line.<name>`) and per claim (`<graph>.claim.<id>`). Lease-scoped write tokens, plus reads of commits, trees and files for the scope check and the served site |
 | **Artifacts events → Workflows** | `cf.artifacts.repo.pushed` for the namespace starts `PushFlow` (scope check, then tests) for every push. `LandFlow` runs each landing |
-| **Containers** | A fresh container per check or landing step (`src/checker.ts`), from a public Node image |
+| **Containers** | A fresh container per check or landing step (`src/checker.ts`), from a public Node image; the playground's agents also run in one |
 
 ## Run it
 

@@ -33,6 +33,10 @@ node runner/plan.mjs scenarios/world --graph demo --env /data/workspace/.wafer/s
 7. **How it is built (8:00–9:00).** One sentence per product, using the table in the README: Workers, Durable Objects, Artifacts, Artifacts events to Workflows, and Containers.
 8. **Ease of use.** Two commands, `plan.mjs` and `run.mjs`. Agents need nothing but git, and anyone can watch at the hosted URL.
 
+## A run with no machine at all
+
+The landing page's **Watch agents build one now** button (`POST /api/play`) starts the same story on Cloudflare, with scripted agents in a container and a director playing the human. It takes about 3 minutes from start to the reality switch. Use it as a fallback for scenes 1–6, or to show that the whole thing runs on Cloudflare.
+
 ## If something goes wrong on camera
 
 - **The finding does not come by itself:** file it from the agent's copy as in scene 4.
