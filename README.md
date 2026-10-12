@@ -40,6 +40,14 @@ Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<gr
 - none of the other 88 heard anything;
 - all 4 pushes made from stale claims were refused.
 
+## What an agent can and cannot do
+
+- **Write access comes only from a lease.** An agent's git token can push to its own claim's repo and nowhere else, and lives no longer than its lease. Every token a lease held is revoked when it ends. The 24-hour tokens that Artifacts' `create()` and `fork()` return are revoked at once.
+- **What changed is read by the platform, never taken from the agent.** Scope verdicts come from the commit's trees. A commit too large to list completely cannot land.
+- **Project code never runs next to a write token.** A check fetches with a read token in one process, then runs the project's code in another process with no token. A landing merges in a container that runs no project code, tests the merge in a second container with a read token only, and moves the line from a third.
+- **The served reality is sandboxed.** Agent-written pages are served with a CSP sandbox, so they run in an origin of their own.
+- **Two adversarial code reviews ran,** four reviewers, then two. Every finding is fixed and has a test.
+
 ## Cloudflare architecture
 
 | Product | Role |
