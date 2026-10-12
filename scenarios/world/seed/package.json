@@ -1,0 +1,7 @@
+{
+  "name": "superpose-world",
+  "private": true,
+  "type": "module",
+  "description": "A seeded procedural world, built module by module by agents coordinated through Superpose",
+  "scripts": { "test": "node --test" }
+}

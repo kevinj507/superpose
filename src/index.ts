@@ -82,14 +82,13 @@ route('POST', '/api/graphs/:gid/landings', 'admin', async ({ graph, params }) =>
 route('POST', '/api/graphs/:gid/findings/:fid/verify', 'admin', ({ graph, params }) => graph.verifyFinding(params.fid!));
 route('POST', '/api/graphs/:gid/findings/:fid/refute', 'admin', ({ graph, params }) => graph.refuteFinding(params.fid!));
 
-route('POST', '/api/graphs/:gid/lines/:line', 'admin', ({ graph, params, body }) =>
-  graph.createLine(params.gid!, {
-    name: params.line!,
-    from: str(body.from) || 'main',
-    decision: str(body.decision) || undefined,
-    option: str(body.option) || undefined,
-  }),
-);
+// With `from`: fork that line into a new one (another option of a decision).
+// Without: label an existing line (e.g. say which option main is).
+route('POST', '/api/graphs/:gid/lines/:line', 'admin', ({ graph, params, body }) => {
+  const labels = { decision: str(body.decision) || undefined, option: str(body.option) || undefined };
+  if (!str(body.from)) return graph.labelLine(params.gid!, params.line!, labels);
+  return graph.createLine(params.gid!, { name: params.line!, from: str(body.from), ...labels });
+});
 route('POST', '/api/graphs/:gid/lines/:line/serve', 'admin', ({ graph, params }) => graph.serve(params.line!));
 route('POST', '/api/graphs/:gid/lines/:line/access', 'admin', ({ graph, params, body }) =>
   graph.lineAccess(params.gid!, params.line!, body.scope === 'write' ? 'write' : 'read', Number(body.ttl) || 3600),

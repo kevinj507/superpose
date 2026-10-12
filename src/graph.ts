@@ -96,6 +96,13 @@ export class Graph extends DurableObject<Env> {
     return this.runWithRepos(graph, (c) => c.createLine(input));
   }
 
+  labelLine(graph: string, name: string, labels: { decision?: string; option?: string }) {
+    return this.runWithRepos(graph, async (c) => {
+      await c.ensureLine(name);
+      return this.engine.labelLine(name, labels);
+    });
+  }
+
   serve(line: string) {
     return this.run((e) => e.serve(line));
   }

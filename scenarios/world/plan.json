@@ -1,0 +1,327 @@
+{
+  "about": "Agents build a seeded procedural world, one module per claim. One decision is built two ways: does every module draw from one shared random stream (line main), or from a stream of its own (line own-streams)? The served reality is the world itself, at /served/<graph>/.",
+  "assumptions": [
+    {
+      "key": "shared",
+      "statement": "Modules can all draw from one shared random stream: what one module draws does not affect the others"
+    },
+    {
+      "key": "own",
+      "statement": "Each module draws from its own random stream, seeded by the world's seed and the module's name"
+    },
+    {
+      "key": "contract",
+      "statement": "Modules talk to each other only through the layers listed in WORLD.md"
+    }
+  ],
+  "lines": [
+    {
+      "name": "main",
+      "decision": "How do modules get their randomness?",
+      "option": "one shared stream"
+    },
+    {
+      "name": "own-streams",
+      "from": "main",
+      "decision": "How do modules get their randomness?",
+      "option": "a stream per module",
+      "overlay": "seed-b"
+    }
+  ],
+  "claims": [
+    {
+      "key": "terrain",
+      "line": "main",
+      "statement": "Terrain: a smooth height map from the seed (value noise or similar), heights from 0 to 1, with deep sea, lowlands, hills and a few peaks",
+      "scope": [
+        "src/gen/terrain.js",
+        "test/terrain.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": []
+    },
+    {
+      "key": "water",
+      "line": "main",
+      "statement": "Sea: cells below a sea level of about 0.35 are sea, and every world is 25 to 50 percent sea",
+      "scope": [
+        "src/gen/water.js",
+        "test/water.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "terrain"
+      ]
+    },
+    {
+      "key": "rivers",
+      "line": "main",
+      "statement": "Rivers: 3 to 6 rivers that start on high ground and flow downhill, one cell at a time, until they reach the sea",
+      "scope": [
+        "src/gen/rivers.js",
+        "test/rivers.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "terrain",
+        "water"
+      ]
+    },
+    {
+      "key": "biomes",
+      "line": "main",
+      "statement": "Biomes: every cell gets a biome (sea, beach, grass, forest, hills, mountain, snow) from its height and its distance to water",
+      "scope": [
+        "src/gen/biomes.js",
+        "test/biomes.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "terrain",
+        "water"
+      ]
+    },
+    {
+      "key": "forests",
+      "line": "main",
+      "statement": "Forests: trees scattered in natural clumps on grass and forest biomes, never on sea, rivers or beaches",
+      "scope": [
+        "src/gen/forests.js",
+        "test/forests.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "biomes",
+        "rivers"
+      ]
+    },
+    {
+      "key": "towns",
+      "line": "main",
+      "statement": "Towns: 3 to 8 towns on dry, flat land next to a river or the coast, at least 10 cells apart",
+      "scope": [
+        "src/gen/towns.js",
+        "test/towns.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "rivers",
+        "biomes"
+      ]
+    },
+    {
+      "key": "roads",
+      "line": "main",
+      "statement": "Roads: every town is connected to its nearest neighbour by a road that avoids water and prefers flat ground",
+      "scope": [
+        "src/gen/roads.js",
+        "test/roads.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "towns"
+      ]
+    },
+    {
+      "key": "names",
+      "line": "main",
+      "statement": "Names: every town gets a unique, pronounceable name built from syllables",
+      "scope": [
+        "src/gen/names.js",
+        "test/names.test.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "towns"
+      ]
+    },
+    {
+      "key": "links",
+      "line": "main",
+      "statement": "Stable world links: a link to a world (its seed) keeps showing the same towns, rivers and roads after later changes to other modules. Prove it with a test that changes how much randomness the forests module draws and checks that the towns do not move",
+      "scope": [
+        "test/links.test.js",
+        "src/links.js"
+      ],
+      "restsOn": [
+        "shared",
+        "contract"
+      ],
+      "requires": [
+        "towns",
+        "forests"
+      ]
+    },
+    {
+      "key": "terrain-b",
+      "line": "own-streams",
+      "statement": "Terrain: a smooth height map from the seed (value noise or similar), heights from 0 to 1, with deep sea, lowlands, hills and a few peaks",
+      "scope": [
+        "src/gen/terrain.js",
+        "test/terrain.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": []
+    },
+    {
+      "key": "water-b",
+      "line": "own-streams",
+      "statement": "Sea: cells below a sea level of about 0.35 are sea, and every world is 25 to 50 percent sea",
+      "scope": [
+        "src/gen/water.js",
+        "test/water.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "terrain-b"
+      ]
+    },
+    {
+      "key": "rivers-b",
+      "line": "own-streams",
+      "statement": "Rivers: 3 to 6 rivers that start on high ground and flow downhill, one cell at a time, until they reach the sea",
+      "scope": [
+        "src/gen/rivers.js",
+        "test/rivers.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "terrain-b",
+        "water-b"
+      ]
+    },
+    {
+      "key": "biomes-b",
+      "line": "own-streams",
+      "statement": "Biomes: every cell gets a biome (sea, beach, grass, forest, hills, mountain, snow) from its height and its distance to water",
+      "scope": [
+        "src/gen/biomes.js",
+        "test/biomes.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "terrain-b",
+        "water-b"
+      ]
+    },
+    {
+      "key": "forests-b",
+      "line": "own-streams",
+      "statement": "Forests: trees scattered in natural clumps on grass and forest biomes, never on sea, rivers or beaches",
+      "scope": [
+        "src/gen/forests.js",
+        "test/forests.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "biomes-b",
+        "rivers-b"
+      ]
+    },
+    {
+      "key": "towns-b",
+      "line": "own-streams",
+      "statement": "Towns: 3 to 8 towns on dry, flat land next to a river or the coast, at least 10 cells apart",
+      "scope": [
+        "src/gen/towns.js",
+        "test/towns.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "rivers-b",
+        "biomes-b"
+      ]
+    },
+    {
+      "key": "roads-b",
+      "line": "own-streams",
+      "statement": "Roads: every town is connected to its nearest neighbour by a road that avoids water and prefers flat ground",
+      "scope": [
+        "src/gen/roads.js",
+        "test/roads.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "towns-b"
+      ]
+    },
+    {
+      "key": "names-b",
+      "line": "own-streams",
+      "statement": "Names: every town gets a unique, pronounceable name built from syllables",
+      "scope": [
+        "src/gen/names.js",
+        "test/names.test.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "towns-b"
+      ]
+    },
+    {
+      "key": "links-b",
+      "line": "own-streams",
+      "statement": "Stable world links: a link to a world (its seed) keeps showing the same towns, rivers and roads after later changes to other modules. Prove it with a test that changes how much randomness the forests module draws and checks that the towns do not move",
+      "scope": [
+        "test/links.test.js",
+        "src/links.js"
+      ],
+      "restsOn": [
+        "own",
+        "contract"
+      ],
+      "requires": [
+        "towns-b",
+        "forests-b"
+      ]
+    }
+  ]
+}

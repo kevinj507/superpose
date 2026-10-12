@@ -360,6 +360,15 @@ export class Engine {
     return line;
   }
 
+  // Say which option of which decision an existing line is.
+  labelLine(name: string, labels: { decision?: string; option?: string }): Line {
+    const line = { ...this.line(name) };
+    if (labels.decision !== undefined) line.decision = labels.decision;
+    if (labels.option !== undefined) line.option = labels.option;
+    this.store.putLine(line);
+    return line;
+  }
+
   // Switch what is served: a pointer change. Nothing is deleted; the previous
   // reality stays as it was, retraceable.
   serve(name: string): Line {

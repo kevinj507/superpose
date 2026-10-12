@@ -44,6 +44,8 @@ async function twoWays() {
   await hostOf(gid, (h) => h.commit(`${gid}.line.main`, { 'index.html': '<h1>counter</h1>' }, 'seed'));
   const forked = await api('POST', `${g}/lines/do`, ADMIN, { from: 'main', decision: 'Where do the counters live?', option: 'a Durable Object' });
   expect(forked.status).toBe(200);
+  const labelled = await api('POST', `${g}/lines/main`, ADMIN, { decision: 'Where do the counters live?', option: 'KV' });
+  expect(labelled.data).toMatchObject({ name: 'main', served: true, option: 'KV' });
   const kv = (await api('POST', `${g}/assumptions`, ADMIN, { statement: 'KV reads are strongly consistent' })).data;
   const dobj = (await api('POST', `${g}/assumptions`, ADMIN, { statement: 'A Durable Object serialises every write' })).data;
   const a = (await api('POST', `${g}/claims`, ADMIN, { statement: 'Counters in KV', scope: ['**'], restsOn: [kv.id] })).data;
@@ -58,7 +60,7 @@ describe('realities: one decision built two ways', () => {
   it('each option lands into its own line, and the main line is the one served', async () => {
     const w = await twoWays();
     const snap = (await api('GET', `${w.g}/snapshot`)).data;
-    expect(snap.lines.map((l: any) => [l.name, l.served, !!l.head])).toEqual([['main', true, true], ['do', false, true]]);
+    expect(snap.lines.map((l: any) => [l.name, l.served, !!l.head, l.option])).toEqual([['main', true, true, 'KV'], ['do', false, true, 'a Durable Object']]);
     expect(snap.lines[1]).toMatchObject({ from: 'main', inherits: [], decision: 'Where do the counters live?' });
     const page = await SELF.fetch(`https://superpose.test/served/${w.gid}/`);
     expect(await page.text()).toBe('<h1>counter (KV)</h1>');

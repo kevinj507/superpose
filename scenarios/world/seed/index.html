@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Superpose World</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0b1622; color: #e8eef5; }
+    body { margin: 0; padding: 24px 16px; display: grid; gap: 16px; justify-items: center; }
+    h1 { margin: 0; font-size: 20px; letter-spacing: 0.02em; }
+    p { margin: 0; color: #9fb3c8; font-size: 14px; max-width: 576px; text-align: center; }
+    canvas { width: min(576px, 100%); image-rendering: pixelated; border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+    form { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    input, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #2c4258; background: #13263a; color: inherit; }
+    button { cursor: pointer; }
+    #status { font-size: 12px; color: #7f95ab; }
+    ul { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; font-size: 13px; }
+    li span { color: #7f95ab; }
+  </style>
+</head>
+<body>
+  <h1>Superpose World</h1>
+  <p>A world from a seed, built module by module by agents. The same seed should always give the same world.</p>
+  <form id="form"><input id="seed" aria-label="seed" /><button>Show this world</button><button type="button" id="random">Another world</button></form>
+  <canvas id="world"></canvas>
+  <ul id="towns"></ul>
+  <div id="status"></div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
