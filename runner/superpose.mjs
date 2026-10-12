@@ -42,6 +42,7 @@ import {
   setMarker,
   shortSha,
   sleep,
+  stateFile,
   takeUnread,
   trailerClaims,
   updateClaim,
@@ -272,6 +273,17 @@ async function replan({ dir, claim, api }, values) {
   }
   const { claim: next, git: access } = res.data;
   if (access?.token) writeGitAuth(dir, access.remote, access.token);
+  // A claim taken over while stale came with no code: fetch it now.
+  let fetched = '';
+  if (access?.token && !gitHead(dir)) {
+    const f = git(dir, ['fetch', '--quiet', 'origin', 'main'], { check: false, timeoutMs: 120_000 });
+    if (f.code === 0) {
+      git(dir, ['reset', '--quiet', '--hard', 'refs/remotes/origin/main']);
+      fetched = `Fetched the claim's repository: your copy is now at ${shortSha(gitHead(dir))}.\n`;
+    } else {
+      fetched = `Could not fetch the claim's repository (${f.stderr.trim().split('\n').at(-1)}); try \`git fetch origin main && git reset --hard origin/main\`.\n`;
+    }
+  }
   const updated = updateClaim(dir, {
     scope: next.scope,
     statement: next.statement,
@@ -287,9 +299,10 @@ async function replan({ dir, claim, api }, values) {
   recordNotices(dir, [
     localNotice(`You re-planned claim ${claim.claim} (version ${next.version})`, `It now rests on: ${rests}. Scope: ${next.scope.join(', ')}.`, 'local.replanned'),
   ]);
-  if (values.json) return say(JSON.stringify({ claim: { ...next, lease: undefined }, restsOn }));
+  if (values.json) return say(JSON.stringify({ claim: { ...next, lease: undefined }, restsOn, head: gitHead(dir) }));
   say(
     `Re-planned claim ${claim.claim}: now version ${next.version}.\n` +
+      fetched +
       `It rests on: ${rests}${kept ? ' (the assumptions that still hold; pass --rests-on to choose)' : ''}.\n` +
       `Scope: ${next.scope.join(', ')}.\n` +
       'Pushes are accepted again and the runner renews the lease as before. CLAIM.md is updated.\n' +
@@ -460,6 +473,10 @@ const ZERO = /^0{40}$/;
 // scope), and show what Superpose said since the last push.
 function prePush({ dir, claim }) {
   const input = readFileSync(0, 'utf8');
+  // The hook's parent is the `git push` itself. While it runs, the runner
+  // holds off renewing the lease: a renewal replaces the git token, and the
+  // old one stops working at once, which would fail this push halfway.
+  atomicWrite(stateFile(dir, 'pushing.json'), JSON.stringify({ pid: process.ppid, at: Date.now() }) + '\n');
   const problems = [];
   const warnings = [];
   const unread = takeUnread(dir, 'push');

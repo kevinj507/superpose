@@ -41,6 +41,7 @@ import {
   installGitAuth,
   loadEnv,
   localNotice,
+  readJson,
   recordNotices,
   renderClaimMd,
   serviceUrl,
@@ -66,6 +67,9 @@ const USAGE = `Usage: node runner/run.mjs --graph <gid> [options]
   --only <ids>           take only these claims (comma-separated)
   --once                 each agent takes one claim, then stops
   --hold <seconds>       scripted agents hold each claim this long before finishing
+  --skip-stale           do not take over stale claims nobody holds (by default an agent
+                         takes one when nothing is ready, and re-plans it first)
+  --max-attempts <n>     take the same claim at most this many times in one run (default 2)
   --renew-every <s>      renew leases this often (default: a third of the lease, at most 60 s)
   --patience <s>         stop waiting for claims to become ready after this long without
                          any change in the graph (default 600)
@@ -89,6 +93,8 @@ const OPTIONS = {
   only: { type: 'string' },
   once: { type: 'boolean' },
   hold: { type: 'string' },
+  'skip-stale': { type: 'boolean' },
+  'max-attempts': { type: 'string', default: '2' },
   'renew-every': { type: 'string' },
   patience: { type: 'string', default: '600' },
   name: { type: 'string' },
@@ -204,6 +210,14 @@ class Runner {
     this.cacheAt = 0;
     this.pending = null;
     this.wakers = new Set();
+    // How many times this run has taken each claim: one that keeps coming
+    // back (its agents give up, or cannot re-plan it) is left for a human.
+    this.attempts = new Map();
+  }
+
+  mayTake(id) {
+    if (this.opts.only && !this.opts.only.has(id)) return false;
+    return (this.attempts.get(id) ?? 0) < this.opts.maxAttempts;
   }
 
   // The graph, shared by every slot, at most a few seconds old.
@@ -354,17 +368,31 @@ class Slot {
       this.log(`could not read the ready claims: ${explainError(ready)}`);
       return null;
     }
-    let candidates = ready.data.filter((c) => !this.runner.inFlight.has(c.id) && (!this.opts.only || this.opts.only.has(c.id)));
+    const wanted = (c) => !this.runner.inFlight.has(c.id) && this.runner.mayTake(c.id);
+    let candidates = ready.data.filter(wanted);
     // Agents start at different places in the list, so they rarely collide.
     const k = candidates.length ? (this.n - 1) % candidates.length : 0;
     candidates = [...candidates.slice(k), ...candidates.slice(0, k)];
+    // Then claims that went stale with nobody holding them (a verified finding
+    // reached them while they waited, or after they were finished): whoever
+    // takes one re-plans it before working on it.
+    if (!this.opts.skipStale) {
+      const index = await this.runner.snapshot({ maxAgeMs: 0 });
+      const now = Date.now();
+      const orphans = [...(index?.nodes.values() ?? [])].filter(
+        (n) => n.kind === 'claim' && n.status === 'stale' && (!n.lease || n.lease.expiresAt <= now) && wanted(n),
+      );
+      candidates.push(...orphans);
+    }
     for (const c of candidates) {
       if (this.runner.stopping) return null;
       this.runner.inFlight.add(c.id);
       const t0 = Date.now();
       const res = await this.api.claim(this.opts.agentKey, c.id, this.name);
       if (res.ok) {
-        this.log(`took ${c.id} in ${Date.now() - t0} ms: ${c.statement}`);
+        this.runner.attempts.set(c.id, (this.runner.attempts.get(c.id) ?? 0) + 1);
+        const stale = res.data.status === 'stale' ? ' (stale: it must be re-planned first)' : '';
+        this.log(`took ${c.id} in ${Date.now() - t0} ms${stale}: ${c.statement}`);
         return { id: c.id, node: c, ...res.data };
       }
       this.runner.inFlight.delete(c.id);
@@ -391,8 +419,11 @@ class Slot {
     const index = await this.runner.snapshot({ maxAgeMs: 0 });
     if (!index) return false;
     const claims = [...index.nodes.values()].filter((n) => n.kind === 'claim');
-    const wanted = this.opts.only ? claims.filter((c) => this.opts.only.has(c.id)) : claims;
-    if (!wanted.some((c) => c.status === 'open')) return true;
+    const now = Date.now();
+    const takeable = (c) =>
+      this.runner.mayTake(c.id) &&
+      (c.status === 'open' || (c.status === 'stale' && !this.opts.skipStale && (!c.lease || c.lease.expiresAt <= now)));
+    if (!claims.some(takeable)) return true;
     if (this.runner.inFlight.size) return false;
     const live = claims.some((c) => (c.status === 'claimed' || c.status === 'stale') && c.lease && c.lease.expiresAt > Date.now());
     const landing = claims.some((c) => landingPending(c, index));
@@ -413,15 +444,14 @@ class Slot {
     this.claimId = id;
     this.dir = dir;
     this.set({ claim: id, state: 'preparing', since: Date.now(), last: 'cloning its repository' });
-    if (grant.status === 'stale' || !grant.git) {
-      // Only open claims come from the ready list; a stale one needs re-planning first.
-      this.log(`${id} came without write access (status ${grant.status}); handing it back`);
-      await this.api.release(grant.token, id);
-      return;
-    }
     const t0 = Date.now();
     await this.prepare(dir, grant);
-    this.log(`cloned ${grant.repo.name} at ${shortSha(grant.baseSha)} into ${relative(process.cwd(), dir)} in ${Date.now() - t0} ms`);
+    if (grant.git) {
+      this.log(`cloned ${grant.repo.name} at ${shortSha(grant.baseSha)} into ${relative(process.cwd(), dir)} in ${Date.now() - t0} ms`);
+    } else {
+      this.log(`${id} is stale, so it comes without write access; its code arrives when the agent re-plans it`);
+      this.set({ state: 'stale' });
+    }
 
     const lease = new LeaseKeeper(this, dir, id, grant);
     lease.start();
@@ -435,12 +465,21 @@ class Slot {
   }
 
   // The working copy: a clone of the claim's repo with the git token in
-  // repo-local config, the agent's brief, the claim file and the hooks.
+  // repo-local config, the agent's brief, the claim file and the hooks. A
+  // stale claim gets no git token until it is re-planned, so its copy starts
+  // empty and the CLI fetches the code after the re-plan.
   async prepare(dir, grant) {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dirname(dir), { recursive: true });
-    await gitAsync(dirname(dir), ['clone', '--quiet', grant.repo.remote, grant.id], { env: gitAuthEnv(grant.git.token) });
-    installGitAuth(dir, grant.repo.remote, grant.git.token);
+    if (grant.git) {
+      await gitAsync(dirname(dir), ['clone', '--quiet', grant.repo.remote, grant.id], { env: gitAuthEnv(grant.git.token) });
+      installGitAuth(dir, grant.repo.remote, grant.git.token);
+    } else {
+      mkdirSync(dir);
+      git(dir, ['init', '--quiet', '-b', 'main']);
+      git(dir, ['remote', 'add', 'origin', grant.repo.remote]);
+      installGitAuth(dir, grant.repo.remote, 'none-until-the-claim-is-re-planned');
+    }
     git(dir, ['config', 'user.name', this.name]);
     git(dir, ['config', 'user.email', `${this.name}@agents.superpose.invalid`]);
     // An empty line clones with no commits; make sure the first one goes on main.
@@ -466,13 +505,25 @@ class Slot {
       scope: grant.node.scope,
       baseSha: grant.baseSha ?? null,
       repo: grant.repo,
-      gitExpiresAt: grant.git.expiresAt,
+      gitExpiresAt: grant.git?.expiresAt ?? null,
       status: grant.status,
       takenAt: Date.now(),
     };
     writeClaim(dir, claim);
     atomicWrite(stateFile(dir, 'NOTICES.md'), `# Notices for claim ${grant.id} (newest first)\n\nNone yet. The runner adds to this file at every lease renewal.\n`);
     const index = await this.runner.snapshot({ maxAgeMs: 0 });
+    if (grant.status === 'stale') {
+      // The renewals only carry what happens from now on; tell the new holder
+      // why the claim went stale before it was taken.
+      const why = (index?.events ?? []).filter((e) => e.type === 'claim.stale' && e.claims.includes(grant.id));
+      recordNotices(dir, why.map((e) => describeNotice(e, index, grant.id)));
+      setMarker(
+        dir,
+        'STALE',
+        `Claim ${grant.id} was stale when this agent took it over: something it rested on was shown to be false. ` +
+          `Re-plan it before anything else; the claim's code arrives in this folder with the re-plan.`,
+      );
+    }
     atomicWrite(join(dir, 'CLAIM.md'), renderClaimMd(claim, index, dir));
   }
 
@@ -739,6 +790,12 @@ class LeaseKeeper {
 
   async renew() {
     if (this.stopped || hasMarker(this.dir, 'DONE') || hasMarker(this.dir, 'RELEASED')) return this.stop();
+    // A renewal replaces the git token and the old one stops working at once,
+    // so wait for a push in flight to end, unless the lease is running out.
+    if (pushInFlight(this.dir) && this.expiresAt - Date.now() > 90_000) {
+      this.next = 3000;
+      return;
+    }
     const res = await this.runner.api.renew(this.token, this.id);
     if (this.stopped) return;
     this.next = this.interval;
@@ -803,6 +860,19 @@ class LeaseKeeper {
 
 // ---- helpers -------------------------------------------------------------------------------------------------
 
+// The pre-push hook records the `git push` process; it is in flight while
+// that process lives (markers older than five minutes are ignored).
+function pushInFlight(dir) {
+  const p = readJson(stateFile(dir, 'pushing.json'), null);
+  if (!p?.pid || Date.now() - p.at > 300_000) return false;
+  try {
+    process.kill(p.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // A finished claim the platform will still land by itself: its head passed
 // its checks, or they have not finished yet, and its landing has not failed.
 function landingPending(c, index) {
@@ -837,11 +907,15 @@ function ancestorInstructionFiles(dir) {
 
 function prompt(dir, id) {
   const brief = readFileSync(join(dir, 'CLAIM.md'), 'utf8');
+  const stale = hasMarker(dir, 'STALE')
+    ? `\n\nThis claim is STALE: something it rested on was shown to be false (see .superpose/NOTICES.md). Re-plan it before ` +
+      `anything else, as CLAIM.md explains; this folder has no code yet, and the claim's code arrives when the re-plan succeeds.`
+    : '';
   return (
     `You are an autonomous software agent working on claim ${id} of a project coordinated by Superpose. ` +
     'Your current directory is the git repository for this claim. Everything you need is in CLAIM.md, reproduced ' +
     'below (it is also in this directory). Follow it exactly. Nobody will answer questions: make your own decisions ' +
-    `and keep going until you have run \`${CMD} done\` (or, if you truly cannot finish, \`${CMD} release "<why>"\`).\n\n---\n\n${brief}`
+    `and keep going until you have run \`${CMD} done\` (or, if you truly cannot finish, \`${CMD} release "<why>"\`).${stale}\n\n---\n\n${brief}`
   );
 }
 
@@ -895,6 +969,8 @@ async function main() {
       only: values.only ? new Set(values.only.split(',').map((s) => s.trim()).filter(Boolean)) : null,
       once: !!values.once,
       hold: values.hold ? Number(values.hold) : 0,
+      skipStale: !!values['skip-stale'],
+      maxAttempts: Number(values['max-attempts']) || 2,
       renewEvery: values['renew-every'],
       patience: Number(values.patience) || 600,
       name: values.name || values.agent,

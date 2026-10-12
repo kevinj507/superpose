@@ -61,6 +61,26 @@ function push(extra = []) {
   return git(dir, ['push', ...extra, 'origin', 'HEAD:refs/heads/main'], { check: false });
 }
 
+// Declare a new assumption and re-plan: the claim then rests on it and on
+// whatever it rested on that still holds.
+function replan() {
+  const declared = superpose(['assume', `Scripted re-plan for ${claim.claim}: the work no longer depends on what was contradicted`, '--json']);
+  if (declared.code !== 0) {
+    say(`Could not declare the new assumption:\n${declared.out}`);
+    return false;
+  }
+  const plan = superpose(['replan']);
+  say(plan.out);
+  return plan.code === 0;
+}
+
+if (hasMarker(dir, 'STALE')) {
+  say(`Taking over a stale claim: ${(readMarker(dir, 'STALE') ?? '').trim()}`);
+  if (!replan()) {
+    process.exit(1);
+  }
+}
+
 const file = targetFile(claim.scope, claim.claim);
 say(`Working on ${claim.claim}: ${claim.statement}`);
 say(`Editing ${file} (inside the scope ${claim.scope.join(', ')})`);
@@ -95,15 +115,7 @@ for (let waited = 0; waited < hold; waited++) {
     const sha = commit(file, `More work on ${claim.claim}`);
     r = push();
     say(r.code === 0 ? `Unexpected: the push of ${shortSha(sha)} went through while stale` : `The pre-push hook refused ${shortSha(sha)}, as it should:\n${r.stderr.trim()}`);
-    const declared = superpose(['assume', `Scripted re-plan for ${claim.claim}: the work no longer depends on what was contradicted`, '--json']);
-    if (declared.code !== 0) {
-      say(`Could not declare the new assumption:\n${declared.out}`);
-      break;
-    }
-    const assumption = JSON.parse(declared.out);
-    const plan = superpose(['replan', '--rests-on', assumption.id]);
-    say(plan.out);
-    if (plan.code !== 0) break;
+    if (!replan()) break;
     r = push();
     say(r.code === 0 ? `Pushed ${shortSha(sha)} after re-planning` : `Push after re-planning failed:\n${r.stderr.trim()}`);
     replanned = true;
