@@ -4,21 +4,44 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "durable_objects": {
-    "bindings": [{ "name": "GRAPH", "class_name": "Graph" }]
+    "bindings": [
+      { "name": "GRAPH", "class_name": "Graph" },
+      { "name": "CHECKER", "class_name": "Checker" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Graph"] }],
-  // The live canvas (public/): served as static files. Only /api/* reaches the
-  // Worker; any other path (e.g. /g/demo) gets public/index.html.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Graph"] },
+    { "tag": "v2", "new_sqlite_classes": ["Checker"] }
+  ],
+  // Checks and landings run in a fresh container each, from a public image
+  // (plain Node with git), so nothing is built locally.
+  "containers": [
+    {
+      "class_name": "Checker",
+      "image": "docker.io/library/node:22-bookworm",
+      "max_instances": 8,
+      "instance_type": "basic"
+    }
+  ],
+  // No Docker here: containers run only when deployed.
+  "dev": { "enable_containers": false },
+  // The live canvas (public/): served as static files. /api/* and the served
+  // app (/served/*) reach the Worker; any other path (e.g. /g/demo) gets
+  // public/index.html.
   "assets": {
     "directory": "./public",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/served/*"]
   },
   // Every claim gets its own repo here: a fork of its line, named <graph>.claim.<id>.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "superpose" }],
   // Every push to any repo in the namespace starts a PushFlow, which reads the
   // commit and records the verdict on the claim (the event has no file list).
-  "workflows": [{ "binding": "PUSHES", "name": "superpose-pushes", "class_name": "PushFlow" }],
+  "workflows": [
+    { "binding": "PUSHES", "name": "superpose-pushes", "class_name": "PushFlow" },
+    // One landing at a time per line, started by the graph's Durable Object.
+    { "binding": "LANDINGS", "name": "superpose-landings", "class_name": "LandFlow" }
+  ],
   "triggers": {
     "events": [
       {

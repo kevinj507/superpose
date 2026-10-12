@@ -105,6 +105,11 @@ export class FakeRepoHost implements RepoHost {
     return this.kv.get<HostTreeEntry[]>(`tree:${tree}`) ?? null;
   }
 
+  async readFile(repo: string, ref: string, path: string): Promise<string | null> {
+    if (!this.repo(repo)) throw hostError('NOT_FOUND', `no repo ${repo}`);
+    return this.files(ref).get(path) ?? null;
+  }
+
   async readHead(repo: string): Promise<string | null> {
     const r = this.repo(repo);
     if (!r) throw hostError('NOT_FOUND', `no repo ${repo}`);
@@ -138,6 +143,38 @@ export class FakeRepoHost implements RepoHost {
     return { before: r.head ?? null, after: sha, message };
   }
 
+  // Merge `sha` (from any repo: objects are shared here) into `into`'s head,
+  // as a merge commit. A file changed differently on both sides since their
+  // common ancestor is a conflict, and nothing is written.
+  merge(into: string, sha: string, message: string): { merge: string } | { conflict: string[] } {
+    const r = this.repo(into);
+    if (!r) throw hostError('NOT_FOUND', `no repo ${into}`);
+    const ours = r.head;
+    const baseSha = ours ? this.commonAncestor(ours, sha) : undefined;
+    const base = baseSha ? this.files(baseSha) : new Map<string, string>();
+    const mine = ours ? this.files(ours) : new Map<string, string>();
+    const theirs = this.files(sha);
+    const out = new Map(mine);
+    const conflict: string[] = [];
+    for (const path of new Set([...base.keys(), ...mine.keys(), ...theirs.keys()])) {
+      const b = base.get(path);
+      const m = mine.get(path);
+      const t = theirs.get(path);
+      if (t === b || t === m) continue; // they did not change it, or made the same change
+      if (m === b) {
+        if (t === undefined) out.delete(path);
+        else out.set(path, t);
+      } else conflict.push(path);
+    }
+    if (conflict.length) return { conflict: conflict.sort() };
+    const tree = this.writeTree(out);
+    const parents = ours ? [ours, sha] : [sha];
+    const merge = hash(`commit ${tree} ${parents.join(' ')} ${message} ${this.clock.now()}`);
+    this.kv.put(`commit:${merge}`, { sha: merge, tree, parents, message } satisfies HostCommit);
+    this.kv.put(`repo:${into}`, { ...r, head: merge });
+    return { merge };
+  }
+
   head(repo: string): string | undefined {
     return this.repo(repo)?.head;
   }
@@ -165,6 +202,27 @@ export class FakeRepoHost implements RepoHost {
   }
 
   // ---- internals -------------------------------------------------------------
+
+  private commonAncestor(a: string, b: string): string | undefined {
+    const seen = new Set<string>();
+    const walk = [a];
+    while (walk.length) {
+      const sha = walk.pop()!;
+      if (seen.has(sha)) continue;
+      seen.add(sha);
+      walk.push(...(this.kv.get<HostCommit>(`commit:${sha}`)?.parents ?? []));
+    }
+    const queue = [b];
+    const visited = new Set<string>();
+    while (queue.length) {
+      const sha = queue.shift()!;
+      if (seen.has(sha)) return sha;
+      if (visited.has(sha)) continue;
+      visited.add(sha);
+      queue.push(...(this.kv.get<HostCommit>(`commit:${sha}`)?.parents ?? []));
+    }
+    return undefined;
+  }
 
   private repo(name: string): StoredRepo | undefined {
     return this.kv.get<StoredRepo>(`repo:${name}`);

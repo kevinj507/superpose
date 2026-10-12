@@ -33,6 +33,42 @@ export interface Lease {
   git?: { tokenId: string; expiresAt: number };
 }
 
+// Getting a finished claim into its line: one at a time per line, in
+// dependency order, by a real git merge with the checks run on the result.
+export interface LandingState {
+  status: 'queued' | 'landing' | 'conflict' | 'failed' | 'error';
+  at: number;
+  log?: string;
+  files?: string[]; // the conflicting files, for a conflict
+}
+
+// A line is the code of one reality: a repo the claims built on it land into.
+// Exactly one line is served.
+export interface Line {
+  name: string;
+  repo?: RepoRef;
+  head?: string; // the last landed merge commit
+  served: boolean;
+  landing?: { claim: string; sha: string; startedAt: number };
+  // Where this line came from: the line it was forked from, and the landed
+  // claims whose work it carries from there. A finding against any of them
+  // puts this reality at risk too.
+  from?: string;
+  inherits?: string[];
+  // The decision this line is one option of, in plain words.
+  decision?: string;
+  option?: string;
+}
+
+// One reality's exposure to a finding.
+export interface RealityImpact {
+  line: string;
+  served: boolean;
+  affected: string[]; // its in-flight claims that would go stale
+  landedAtRisk: string[]; // landed work in it (its own or inherited) resting on the finding's target
+  safe: boolean; // rests on nothing the finding contradicts: a switch candidate
+}
+
 // A repository on the git host (Artifacts in production).
 export interface RepoRef {
   name: string;
@@ -55,6 +91,9 @@ export interface Claim {
   repo?: RepoRef; // the claim's own fork of its line, made when first claimed
   baseSha?: string;
   headSha?: string;
+  finishedAt?: number;
+  landing?: LandingState; // set once the claim is in the landing queue
+  landedSha?: string; // the merge commit on the line
   status: ClaimStatus;
   lease?: Lease;
   pushes: number; // progress, used for the cost of an interrupt
@@ -99,7 +138,9 @@ export type Verdict =
   | 'budget-exhausted';
 
 export interface CheckRun {
-  status: 'running' | 'passed' | 'failed' | 'error';
+  // timeout: the check overran its timebox (verdict budget-exhausted);
+  // skipped: the commit declares no checks (the verdict stays unverified).
+  status: 'running' | 'passed' | 'failed' | 'error' | 'timeout' | 'skipped';
   command?: string;
   exitCode?: number;
   log?: string; // the tail of the output
@@ -133,6 +174,9 @@ export type EventType =
   | 'claim.replanned'
   | 'scope.touched' // another claim's push changed files in this claim's scope
   | 'claim.checked' // checks finished on one of the claim's commits
+  | 'claim.landed' // merged into its line, checks passing on the merged result
+  | 'claim.landing_failed' // a conflict or failing checks on the merged result: needs a decision
+  | 'reality.served' // a different line is now the served reality
   | 'reality.at_risk';
 
 export interface GraphEvent {

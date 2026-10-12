@@ -67,3 +67,13 @@ describe('assumptions declared by agents', () => {
     expect(() => engine.declareAssumption(z!.id, tz!, { assumption: a1.id })).toThrow(/contradicted/);
   });
 });
+
+describe('the ready set', () => {
+  it('offers a claim whose agent died, so another agent picks it up', () => {
+    const w = setup();
+    expect(w.engine.ready().map((c) => c.id)).not.toContain(w.id);
+    w.clock.t += 60_001;
+    expect(w.engine.ready().map((c) => c.id)).toContain(w.id);
+    expect(w.engine.claim(w.id, 'second agent').status).toBe('claimed');
+  });
+});

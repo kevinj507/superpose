@@ -1,0 +1,40 @@
+{
+  "graph": "sim-mv4jmaeq",
+  "agents": 97,
+  "renewIntervalSeconds": 15,
+  "renewals": {
+    "ok": 528,
+    "stale": 30,
+    "failed": 0
+  },
+  "reportedBeforeFiring": {
+    "wouldGoStale": 9,
+    "cost": 0,
+    "landedAtRisk": 3
+  },
+  "hedge": {
+    "seconds": 20,
+    "agentsStoppedOrNotified": 0
+  },
+  "delivery": {
+    "affected": 9,
+    "heard": 9,
+    "missed": [],
+    "secondsAfterVerification": {
+      "min": 0.83,
+      "p50": 9.199,
+      "p90": 13.983,
+      "max": 13.983
+    },
+    "withinOneRenewal": 9
+  },
+  "wrongNotifications": [],
+  "stalePushes": {
+    "attempted": 4,
+    "pushedToGit": 4,
+    "recordedAsStale": 4,
+    "accepted": 0,
+    "errors": []
+  },
+  "staleInGraph": 9
+}

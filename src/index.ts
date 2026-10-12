@@ -1,6 +1,8 @@
 import type { Result } from './graph';
 
 export { Graph } from './graph';
+export { Checker } from './checker';
+export { LandFlow } from './land-flow';
 export { PushFlow } from './push-flow';
 
 // HTTP API in front of the per-graph Durable Objects.
@@ -20,6 +22,8 @@ const STATUS: Record<string, number> = {
   not_done: 409,
   repo_unavailable: 503,
   bad_request: 400,
+  exists: 409,
+  empty_line: 409,
   unknown_commit: 404,
   no_repo: 409,
 };
@@ -69,9 +73,23 @@ route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
   }),
 );
 route('POST', '/api/graphs/:gid/claims/:id/land', 'admin', ({ graph, params }) => graph.land(params.id!));
+route('POST', '/api/graphs/:gid/claims/:id/reopen', 'admin', ({ graph, params }) => graph.reopen(params.id!));
+route('POST', '/api/graphs/:gid/landings', 'admin', async ({ graph, params }) => {
+  await graph.pumpLandings(params.gid!);
+  return { ok: true, value: null };
+});
 route('POST', '/api/graphs/:gid/findings/:fid/verify', 'admin', ({ graph, params }) => graph.verifyFinding(params.fid!));
 route('POST', '/api/graphs/:gid/findings/:fid/refute', 'admin', ({ graph, params }) => graph.refuteFinding(params.fid!));
 
+route('POST', '/api/graphs/:gid/lines/:line', 'admin', ({ graph, params, body }) =>
+  graph.createLine(params.gid!, {
+    name: params.line!,
+    from: str(body.from) || 'main',
+    decision: str(body.decision) || undefined,
+    option: str(body.option) || undefined,
+  }),
+);
+route('POST', '/api/graphs/:gid/lines/:line/serve', 'admin', ({ graph, params }) => graph.serve(params.line!));
 route('POST', '/api/graphs/:gid/lines/:line/access', 'admin', ({ graph, params, body }) =>
   graph.lineAccess(params.gid!, params.line!, body.scope === 'write' ? 'write' : 'read', Number(body.ttl) || 3600),
 );
@@ -126,9 +144,43 @@ async function sameSecret(given: string, expected: string | undefined): Promise<
   return crypto.subtle.timingSafeEqual(a, b);
 }
 
+const TYPES: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  svg: 'image/svg+xml',
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+};
+
+// The served reality, as a website: GET /served/<graph>/<path> reads the file
+// from the head of whichever line is served, so switching realities changes
+// what visitors get at once. Text files only. Agents wrote this code, so it
+// runs sandboxed in its own origin, away from anything of Superpose's.
+async function served(env: Env, gid: string, rest: string): Promise<Response> {
+  let path = decodeURIComponent(rest.replace(/^\/+/, ''));
+  if (!path || path.endsWith('/')) path += 'index.html';
+  if (path.split('/').some((seg) => seg === '..' || seg === '.')) return new Response('bad path', { status: 400 });
+  const graph = env.GRAPH.get(env.GRAPH.idFromName(gid));
+  const file = await graph.servedFile(gid, path);
+  if (!file) return new Response(`not in the served reality: ${path}`, { status: 404 });
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return new Response(file.text, {
+    headers: {
+      'content-type': TYPES[ext] ?? 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-security-policy': 'sandbox allow-scripts allow-forms allow-popups',
+    },
+  });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
+    const servedPath = /^\/served\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(\/.*)?$/.exec(url.pathname);
+    if (servedPath && request.method === 'GET') return served(env, servedPath[1]!, servedPath[2] ?? '/');
     const match = routes
       .filter((r) => r.method === request.method)
       .map((r) => ({ r, m: r.pattern.exec(url.pathname) }))

@@ -49,7 +49,20 @@ export class Coordinator {
   // The repo for a line, made empty if it does not exist yet. An admin seeds a
   // new line by pushing to it with a token from `lineAccess`.
   async ensureLine(line: string): Promise<RepoRef & { head?: string }> {
-    return this.host.ensure(lineRepoName(this.opts.graph, line));
+    const repo = await this.host.ensure(lineRepoName(this.opts.graph, line));
+    this.tx((e) => {
+      const known = e.line(line);
+      if (!known.repo) e.saveLine({ ...known, repo: { name: repo.name, remote: repo.remote } });
+    });
+    return repo;
+  }
+
+  // Fork a line into a new one: another option of a decision, built side by side.
+  async createLine(input: { name: string; from: string; decision?: string; option?: string }) {
+    const source = await this.ensureLine(input.from);
+    if (!source.head) throw new EngineError('empty_line', `line ${input.from} has no commits to fork`);
+    const fork = await this.host.fork(source.name, lineRepoName(this.opts.graph, input.name));
+    return this.tx((e) => e.addLine({ ...input, repo: { name: fork.name, remote: fork.remote }, head: fork.head }));
   }
 
   async lineAccess(line: string, scope: 'read' | 'write', ttlSeconds: number): Promise<GitAccess & { repo: string }> {
@@ -95,8 +108,15 @@ export class Coordinator {
     }
   }
 
+  // What an agent hands in is whatever is in its repo: the head is read and
+  // recorded before the claim closes, so a push whose event arrives after
+  // the agent finished still counts.
   async finish(id: string, token: string): Promise<void> {
-    const c = this.tx((e) => e.getClaim(id));
+    const c = this.tx((e) => e.checkLease(id, token));
+    if (c.repo && c.status === 'claimed') {
+      const head = await this.host.readHead(c.repo.name);
+      if (head && head !== c.baseSha) await this.inspectPush(id, { sha: head, ref: 'refs/heads/main', before: null });
+    }
     const { revoke } = this.tx((e) => e.finish(id, token));
     if (revoke && c.repo) await this.revokeQuietly(c.repo.name, revoke);
   }
@@ -159,10 +179,11 @@ export class Coordinator {
   // ---- internals -----------------------------------------------------------
 
   // The token never outlives the lease: its lifetime is the lease's remaining
-  // time in whole seconds (the host's minimum is 60).
+  // time in whole seconds, less one for the time minting takes (the host's
+  // minimum is 60).
   private async grantGit(id: string, leaseToken: string, leaseEnds: number, repo: RepoRef): Promise<GitAccess> {
     const now = this.opts.now?.() ?? Date.now();
-    const ttl = Math.max(60, Math.floor((leaseEnds - now) / 1000));
+    const ttl = Math.max(60, Math.floor((leaseEnds - now) / 1000) - 1);
     const t = await this.host.mintToken(repo.name, 'write', ttl);
     let replaced: string | undefined;
     try {

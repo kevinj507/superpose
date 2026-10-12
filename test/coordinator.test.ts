@@ -42,10 +42,10 @@ describe('a claim gets its own repo and a token that lives with its lease', () =
   it('the token can push to the claim\'s repo only, and only until the lease would end', async () => {
     const w = await seeded();
     const grant = await w.coord.claim(w.claim.id, 'agent-1');
-    expect(grant.git!.expiresAt).toBe(w.clock.t + LEASE);
+    expect(grant.git!.expiresAt).toBe(w.clock.t + LEASE - 1000);
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(true);
     expect(w.host.canPush('demo.line.main', grant.git!.token)).toBe(false);
-    w.clock.t += LEASE;
+    w.clock.t += LEASE - 1000;
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(false);
   });
 
@@ -55,7 +55,7 @@ describe('a claim gets its own repo and a token that lives with its lease', () =
     w.clock.t += LEASE / 2;
     const renewed = await w.coord.renew(w.claim.id, grant.token);
     expect(renewed.ok).toBe(true);
-    expect(renewed.git!.expiresAt).toBe(renewed.expiresAt);
+    expect(renewed.git!.expiresAt).toBe(renewed.expiresAt! - 1000);
     expect(w.host.canPush('demo.claim.c1', renewed.git!.token)).toBe(true);
     expect(w.host.canPush('demo.claim.c1', grant.git!.token)).toBe(false);
   });
@@ -194,5 +194,18 @@ describe('repo names route a push back to its graph', () => {
     expect(parseRepoName(claimRepoName('demo', 'c12'))).toEqual({ graph: 'demo', kind: 'claim', id: 'c12' });
     expect(parseRepoName(lineRepoName('demo-2', 'main'))).toEqual({ graph: 'demo-2', kind: 'line', id: 'main' });
     expect(parseRepoName('spike-repo')).toBeNull();
+  });
+});
+
+describe('finishing hands in what is in the repo', () => {
+  it('records the repo\'s head even if its push event has not arrived yet', async () => {
+    const w = await seeded();
+    const grant = await w.coord.claim(w.claim.id, 'agent-1');
+    const { after } = w.host.commit(grant.repo.name, { 'src/rate/limit.ts': 'done' }, `x\n\nSuperpose-Claim: ${w.claim.id}`);
+    await w.coord.finish(w.claim.id, grant.token);
+    expect(w.engine.getClaim(w.claim.id)).toMatchObject({ status: 'done', headSha: after });
+    expect(w.engine.pushRecord(w.claim.id, after)).toMatchObject({ accepted: true, paths: ['src/rate/limit.ts'] });
+    // The late event changes nothing.
+    expect(await w.coord.inspectPush(w.claim.id, { sha: after, ref: 'refs/heads/main', before: null })).toMatchObject({ accepted: true });
   });
 });

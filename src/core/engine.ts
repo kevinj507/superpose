@@ -9,8 +9,11 @@ import type {
   Finding,
   GraphNode,
   KeptBranch,
+  LandingState,
+  Line,
   Notice,
   PushRecord,
+  RealityImpact,
   RepoRef,
   Verdict,
 } from './types';
@@ -27,7 +30,17 @@ export interface EngineOptions {
   // decision is due. Nobody else is stopped meanwhile.
   hedgeMs: number;
   newToken?: () => string;
+  // What a claim that builds on another waits for. 'landed' when claims land
+  // into a line, so a dependent's fork contains the work it builds on.
+  dependencyGate?: 'done' | 'landed';
+  // A landing that has not reported back after this long is given up on.
+  landingTimeoutMs?: number;
 }
+
+export type LandingOutcome =
+  | { status: 'landed'; merge: string; log?: string }
+  | { status: 'conflict'; files: string[]; log?: string }
+  | { status: 'failed' | 'error'; log?: string };
 
 export class EngineError extends Error {
   constructor(
@@ -66,6 +79,7 @@ export interface Impact {
   affected: string[]; // claims that go stale
   landedAtRisk: string[]; // landed claims, part of the served reality
   cost: number; // pushes already made on the affected claims
+  realities: RealityImpact[]; // every line, and whether this finding reaches it
 }
 
 export class Engine {
@@ -142,13 +156,22 @@ export class Engine {
       const src = this.store.getNode(e.source);
       if (!src) return false;
       if (src.kind === 'assumption') return src.status === 'holding';
-      if (src.kind === 'claim') return src.status === 'done' || src.status === 'landed';
+      if (src.kind === 'claim') {
+        return this.opts.dependencyGate === 'landed' ? src.status === 'landed' : src.status === 'done' || src.status === 'landed';
+      }
       return true;
     });
   }
 
+  // Work an agent can take now: claims that are ready, and claims whose
+  // holder's lease lapsed (an agent that died), which can be taken over.
   ready(): Claim[] {
-    return this.claims().filter((c) => this.isReady(c.id));
+    const now = this.clock.now();
+    return this.claims().filter(
+      (c) =>
+        this.isReady(c.id) ||
+        ((c.status === 'claimed' || c.status === 'stale') && (!c.lease || c.lease.expiresAt <= now)),
+    );
   }
 
   // ---- leases --------------------------------------------------------------
@@ -271,11 +294,15 @@ export class Engine {
       if (check.status === 'passed') verdict = 'checks-passed';
       else if (check.status === 'failed') verdict = 'checks-failed';
       else if (check.status === 'error') verdict = 'verifier-failed';
+      else if (check.status === 'timeout') verdict = 'budget-exhausted';
       else verdict = 'unverified';
     }
     const next: PushRecord = { ...row, checks: check, verdict };
     this.store.putPush(next);
-    if (check.status !== 'running') this.emit('claim.checked', [id], { sha, verdict, exitCode: check.exitCode });
+    // Nothing to tell the agent while checks run, or when there are none.
+    if (check.status !== 'running' && check.status !== 'skipped') {
+      this.emit('claim.checked', [id], { sha, verdict, exitCode: check.exitCode });
+    }
     return next;
   }
 
@@ -298,14 +325,124 @@ export class Engine {
   finish(id: string, token: string): { revoke?: string } {
     const c = this.held(id, token);
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
-    this.store.putNode({ ...c, status: 'done', lease: undefined });
+    this.store.putNode({ ...c, status: 'done', lease: undefined, finishedAt: this.clock.now() });
     return { revoke: c.lease!.git?.tokenId };
   }
 
+  // ---- lines and landing ---------------------------------------------------
+
+  // A new line forked from another: the second option of a decision, say.
+  // It carries the work landed on its source so far.
+  addLine(input: { name: string; from: string; repo: RepoRef; head?: string; decision?: string; option?: string }): Line {
+    if (this.store.getLine(input.name)) throw new EngineError('exists', `line ${input.name} exists`);
+    const source = this.line(input.from);
+    const carried = this.claims().filter((c) => c.line === input.from && c.status === 'landed').map((c) => c.id);
+    const line: Line = {
+      name: input.name,
+      repo: input.repo,
+      head: input.head,
+      served: false,
+      from: input.from,
+      inherits: [...(source.inherits ?? []), ...carried],
+    };
+    if (input.decision) line.decision = input.decision;
+    if (input.option) line.option = input.option;
+    if (!this.store.getLine(input.from)) this.store.putLine(source);
+    this.store.putLine(line);
+    return line;
+  }
+
+  // Switch what is served: a pointer change. Nothing is deleted; the previous
+  // reality stays as it was, retraceable.
+  serve(name: string): Line {
+    const target = this.store.getLine(name);
+    if (!target) throw new EngineError('not_found', `no line ${name}`);
+    const previous = this.store.lines().find((l) => l.served);
+    for (const l of this.store.lines()) if (l.served !== (l.name === name)) this.store.putLine({ ...l, served: l.name === name });
+    this.emit('reality.served', [], { line: name, previous: previous?.name ?? null });
+    return { ...target, served: true };
+  }
+
+  line(name: string): Line {
+    return this.store.getLine(name) ?? { name, served: !this.store.lines().some((l) => l.served) };
+  }
+
+  lines(): Line[] {
+    return this.store.lines();
+  }
+
+  saveLine(line: Line): Line {
+    this.store.putLine(line);
+    return line;
+  }
+
+  // Can this finished claim land now? Its head commit must have passed its
+  // checks (or declare none), and everything it builds on must have landed.
+  landable(id: string): boolean {
+    const c = this.claimNode(id);
+    if (c.status !== 'done') return false;
+    if (c.landing && c.landing.status !== 'queued') return false;
+    if (c.headSha) {
+      const row = this.store.getPush(id, c.headSha);
+      const passing = row?.verdict === 'checks-passed' || (row?.verdict === 'unverified' && row.checks?.status === 'skipped');
+      if (!passing) return false;
+    }
+    return this.store.edgesTo(id, 'required for').every((e) => {
+      const src = this.store.getNode(e.source);
+      return src?.kind !== 'claim' || src.status === 'landed';
+    });
+  }
+
+  // The single writer's next move on a line: the oldest finished claim that
+  // can land, if no landing is in flight. A claim with no commits lands as is.
+  beginNextLanding(lineName: string): { claim: string; sha: string } | null {
+    const now = this.clock.now();
+    let line = this.line(lineName);
+    if (line.landing) {
+      const timeout = this.opts.landingTimeoutMs ?? 30 * 60_000;
+      if (now - line.landing.startedAt < timeout) return null;
+      this.failLanding(line.landing.claim, { status: 'error', log: 'the landing never reported back' });
+      line = { ...line, landing: undefined };
+      this.store.putLine(line);
+    }
+    for (;;) {
+      const next = this.claims()
+        .filter((c) => c.line === lineName && this.landable(c.id))
+        .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0))[0];
+      if (!next) return null;
+      if (!next.headSha) {
+        this.markLanded(next.id, undefined, lineName);
+        continue;
+      }
+      this.store.putNode({ ...next, landing: { status: 'landing', at: now } });
+      this.store.putLine({ ...line, landing: { claim: next.id, sha: next.headSha, startedAt: now } });
+      return { claim: next.id, sha: next.headSha };
+    }
+  }
+
+  completeLanding(lineName: string, id: string, outcome: LandingOutcome): void {
+    const line = this.line(lineName);
+    if (line.landing?.claim === id) this.store.putLine({ ...line, landing: undefined });
+    if (outcome.status === 'landed') this.markLanded(id, outcome.merge, lineName);
+    else this.failLanding(id, outcome);
+  }
+
+  // A claim whose landing failed goes back to the ready set, keeping its repo,
+  // so an agent can bring it up to date with the line and finish it again.
+  reopen(id: string): Claim {
+    const c = this.claimNode(id);
+    if (c.status !== 'done') throw new EngineError('not_done', `claim ${id} is ${c.status}`);
+    const next: Claim = { ...c, status: 'open', landing: undefined, finishedAt: undefined };
+    this.store.putNode(next);
+    return next;
+  }
+
+  // Mark a finished claim landed without a merge (a human's decision, or
+  // the record of a merge done elsewhere).
   land(id: string): void {
     const c = this.claimNode(id);
     if (c.status !== 'done') throw new EngineError('not_done', `claim ${id} is ${c.status}`);
-    this.store.putNode({ ...c, status: 'landed' });
+    this.markLanded(id, undefined, c.line);
   }
 
   // Re-plan a stale claim: new statement, scope or assumptions. Its lease is
@@ -375,7 +512,7 @@ export class Engine {
   // What verifying a finding would cost, reported before it fires.
   impactOf(findingId: string): Impact {
     const f = this.finding(findingId);
-    if (f.effect === 'helps') return { affected: [], landedAtRisk: [], cost: 0 };
+    if (f.effect === 'helps') return { affected: [], landedAtRisk: [], cost: 0, realities: this.realitiesAgainst([], []) };
     const affected: string[] = [];
     const landedAtRisk: string[] = [];
     let cost = 0;
@@ -387,7 +524,7 @@ export class Engine {
         cost += c.pushes;
       }
     }
-    return { affected, landedAtRisk, cost };
+    return { affected, landedAtRisk, cost, realities: this.realitiesAgainst(affected, landedAtRisk) };
   }
 
   verifyFinding(findingId: string): Impact {
@@ -483,6 +620,33 @@ export class Engine {
   }
 
   // ---- internals ---------------------------------------------------------------
+
+  private realitiesAgainst(affected: string[], landedAtRisk: string[]): RealityImpact[] {
+    const lines = new Map(this.store.lines().map((l) => [l.name, l]));
+    for (const c of this.claims()) if (!lines.has(c.line)) lines.set(c.line, this.line(c.line));
+    const lineOf = new Map(this.claims().map((c) => [c.id, c.line]));
+    return [...lines.values()].map((l) => {
+      const mine = affected.filter((id) => lineOf.get(id) === l.name);
+      const landed = landedAtRisk.filter((id) => lineOf.get(id) === l.name || (l.inherits ?? []).includes(id));
+      return { line: l.name, served: l.served, affected: mine, landedAtRisk: landed, safe: !mine.length && !landed.length };
+    });
+  }
+
+  private markLanded(id: string, merge: string | undefined, lineName: string) {
+    const c = this.claimNode(id);
+    this.store.putNode({ ...c, status: 'landed', landing: undefined, landedSha: merge });
+    if (merge) this.store.putLine({ ...this.line(lineName), head: merge });
+    this.emit('claim.landed', [id], { line: lineName, merge: merge ?? null });
+  }
+
+  private failLanding(id: string, outcome: Exclude<LandingOutcome, { status: 'landed' }>) {
+    const c = this.claimNode(id);
+    const landing: LandingState = { status: outcome.status, at: this.clock.now() };
+    if (outcome.log) landing.log = outcome.log;
+    if (outcome.status === 'conflict') landing.files = outcome.files;
+    this.store.putNode({ ...c, landing });
+    this.emit('claim.landing_failed', [id], { status: outcome.status, files: landing.files ?? [] });
+  }
 
   // A push that strays outside its scope tells every live claim whose scope it
   // landed in (notify-and-repair), at that claim's next renewal.
