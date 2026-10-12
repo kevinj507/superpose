@@ -1,0 +1,10 @@
+{
+  "name": "tiny-shop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A tiny web shop: a catalog, product pages and buying, in plain Node",
+  "scripts": {
+    "test": "node --test"
+  }
+}

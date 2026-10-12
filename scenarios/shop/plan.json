@@ -1,0 +1,61 @@
+{
+  "name": "tiny-shop",
+  "description": "A tiny web shop in plain Node: a catalog, product pages, buying and prices. Six pieces of work, built by agents at the same time.",
+  "assumptions": [],
+  "claims": [
+    {
+      "key": "cache",
+      "statement": "A small in-memory cache that forgets: src/cache.js exports createCache({ ttlMs, now }). get(key) returns a stored value until ttlMs milliseconds after it was set, and undefined after that; set(key, value) stores a value and starts its time over; getOrSet(key, make) returns the fresh value if there is one, and otherwise stores and returns make(); delete(key) and clear() forget values. now is the clock, Date.now by default, so tests can move time forward instead of waiting. test/cache.test.js covers it.",
+      "scope": [
+        "src/cache.js",
+        "test/cache.test.js"
+      ]
+    },
+    {
+      "key": "fast-pages",
+      "statement": "Product pages load fast: productPage(id) in src/pages.js keeps each product's rendered page for 60 seconds, using the cache from src/cache.js, and serves repeat requests for that product from the cache instead of rendering the page again; a request 60 seconds or more after the page was rendered gets a freshly rendered one. test/pages.test.js covers both.",
+      "scope": [
+        "src/pages.js",
+        "test/pages.test.js"
+      ],
+      "requires": [
+        "cache"
+      ]
+    },
+    {
+      "key": "dynamic-pricing",
+      "statement": "Prices follow demand: every purchase of a product raises that product's price by 5%, compounding and rounded to the cent, so the $40.00 desk lamp costs $42.00 after one purchase and $44.10 after two, and other products keep their prices. src/pricing.js gets recordPurchase(id), which records one purchase and returns the new price, and resetPrices(), which puts every product back at its base price; priceOf(id) returns the current price. test/pricing.test.js covers it.",
+      "scope": [
+        "src/pricing.js",
+        "test/pricing.test.js"
+      ]
+    },
+    {
+      "key": "buying-moves-price",
+      "statement": "Buying moves the price: buy(id) in src/orders.js records every purchase with pricing, so the next buyer pays the new price. buy still returns { ok, product, price } with the price this buyer paid, and the order history keeps it. test/orders.test.js shows three buyers in a row paying $40.00, $42.00 and $44.10 for the desk lamp.",
+      "scope": [
+        "src/orders.js",
+        "test/orders.test.js"
+      ],
+      "requires": [
+        "dynamic-pricing"
+      ]
+    },
+    {
+      "key": "home-page",
+      "statement": "The home page shows what the shop sells: GET / lists every product in the catalog, in catalog order, with its name linking to its page (/products/<id>) and its current price. src/home.js builds the page; test/home.test.js covers it.",
+      "scope": [
+        "src/home.js",
+        "test/home.test.js"
+      ]
+    },
+    {
+      "key": "server",
+      "statement": "The shop runs as a web server: node src/server.js serves it over HTTP on the port in PORT, 3000 by default. src/server.js exports createServer(), a node:http server that passes each request's method and path to handle() from src/app.js and writes back the status, headers and body it answers with; importing the file starts nothing. test/server.test.js covers it with real requests to a server on a free port.",
+      "scope": [
+        "src/server.js",
+        "test/server.test.js"
+      ]
+    }
+  ]
+}
