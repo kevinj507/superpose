@@ -99,6 +99,8 @@ export interface Claim {
   finishedAt?: number;
   deliveredSeq?: number; // the last event its previous holder heard, for the next one
   rebase?: boolean; // reopened: its next holder brings it up to date with the line first
+  // What the agents that worked on it spent, as their runners reported it.
+  spend?: { usd: number; turns: number; runs: number; model?: string };
   landing?: LandingState; // set once the claim is in the landing queue
   landedSha?: string; // the merge commit on the line
   status: ClaimStatus;

@@ -648,6 +648,7 @@ class Slot {
       return;
     }
     if (event.type === 'system' && event.subtype === 'init') {
+      outcome.model = event.model;
       this.set({ last: `model ${event.model}` });
     } else if (event.type === 'assistant') {
       for (const part of event.message?.content ?? []) {
@@ -728,6 +729,12 @@ class Slot {
       cost: outcome.cost || undefined,
       transcript: this.transcript,
     });
+    // What the run cost goes into the graph, beside the claim's verdicts.
+    if (outcome.result) {
+      await this.runner.api
+        .spend(this.opts.agentKey, id, { usd: outcome.cost ?? 0, turns: outcome.result.num_turns ?? outcome.turns ?? 0, model: outcome.model })
+        .catch(() => {});
+    }
     this.set({ state: result, last: '' });
     this.log(`${id}: ${result}`);
   }

@@ -182,3 +182,15 @@ describe('a change of mode is a change', () => {
     expect(await changedPaths(host, 'r', 'c1', 'c2')).toEqual(['deploy.sh']);
   });
 });
+
+describe('what agents spend on a claim', () => {
+  it('adds up across runs, and ignores nonsense', () => {
+    const w = setup();
+    w.engine.recordSpend(w.id, { usd: 0.012, turns: 17, model: 'claude-haiku' });
+    w.engine.recordSpend(w.id, { usd: 0.008, turns: 9 });
+    w.engine.recordSpend(w.id, { usd: Number.NaN, turns: -3 });
+    const spend = w.engine.getClaim(w.id).spend!;
+    expect(spend).toMatchObject({ turns: 26, runs: 3, model: "claude-haiku" });
+    expect(spend.usd).toBeCloseTo(0.02, 6);
+  });
+});

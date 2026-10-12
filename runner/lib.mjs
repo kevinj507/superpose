@@ -156,6 +156,9 @@ export class Api {
   release(lease, id) {
     return this.request('POST', `/claims/${id}/release`, { token: lease, timeoutMs: 60_000 });
   }
+  spend(agentKey, id, input) {
+    return this.request('POST', `/claims/${id}/spend`, { token: agentKey, body: input });
+  }
 }
 
 const HINTS = {

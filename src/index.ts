@@ -103,6 +103,11 @@ route('POST', '/api/graphs/:gid/claims/:id/claim', 'agent', ({ graph, params, bo
   graph.claim(params.gid!, params.id!, str(body.agent) || 'anonymous'),
 );
 
+// What an agent run spent on a claim (the runner reports it when the agent
+// stops, which may be after the claim was finished).
+route('POST', '/api/graphs/:gid/claims/:id/spend', 'agent', ({ graph, params, body }) =>
+  graph.recordSpend(params.id!, { usd: Number(body.usd), turns: Number(body.turns), model: str(body.model) || undefined }),
+);
 route('POST', '/api/graphs/:gid/claims/:id/renew', 'lease', ({ graph, params, bearer }) => graph.renew(params.gid!, params.id!, bearer));
 route('POST', '/api/graphs/:gid/claims/:id/release', 'lease', ({ graph, params, bearer }) => graph.release(params.gid!, params.id!, bearer));
 route('POST', '/api/graphs/:gid/claims/:id/assumptions', 'lease', ({ graph, params, body, bearer }) =>

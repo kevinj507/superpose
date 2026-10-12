@@ -109,6 +109,10 @@ export class Graph extends DurableObject<Env> {
     });
   }
 
+  recordSpend(id: string, input: { usd: number; turns: number; model?: string }) {
+    return this.run((e) => e.recordSpend(id, input));
+  }
+
   why(path: string, line?: string) {
     return this.run((e) => e.why(path, line));
   }

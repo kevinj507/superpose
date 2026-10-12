@@ -393,6 +393,22 @@ export class Engine {
     return c.headSha ? this.store.getPush(id, c.headSha) : undefined;
   }
 
+  // An agent run's spend on a claim, reported by the runner when the agent
+  // stops (after it has finished, so not under the lease). Informational: it
+  // is shown beside the claim's verdicts, never used to judge them.
+  recordSpend(id: string, input: { usd: number; turns: number; model?: string }): Claim {
+    const c = this.claimNode(id);
+    const usd = Number.isFinite(input.usd) && input.usd >= 0 && input.usd < 1000 ? input.usd : 0;
+    const turns = Number.isFinite(input.turns) && input.turns >= 0 && input.turns < 100_000 ? Math.round(input.turns) : 0;
+    const prev = c.spend ?? { usd: 0, turns: 0, runs: 0 };
+    const spend: NonNullable<Claim['spend']> = { usd: prev.usd + usd, turns: prev.turns + turns, runs: prev.runs + 1 };
+    const model = input.model?.slice(0, 64) || prev.model;
+    if (model) spend.model = model;
+    const next = { ...c, spend };
+    this.store.putNode(next);
+    return next;
+  }
+
   // Lease check alone, for calls that do their own work before writing.
   checkLease(id: string, token: string): Claim {
     return this.held(id, token);
