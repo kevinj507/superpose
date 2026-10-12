@@ -81,6 +81,7 @@ export interface ExecOutcome {
   stderr: string;
   ms: number;
   error?: string; // the container could not run the job at all
+  step?: number; // which step's exit code this is
 }
 
 // What the outcome of a check run means for the verdict.
@@ -90,7 +91,9 @@ export function checkRunFrom(outcome: ExecOutcome, config: CheckConfig, startedA
   if (outcome.error || outcome.exitCode === null) return { ...base, status: 'error' };
   const exitCode = outcome.exitCode;
   if (exitCode === 0) return { ...base, status: 'passed', exitCode };
-  if (exitCode === EXIT_FETCH_FAILED) return { ...base, status: 'error', exitCode };
+  // Only the fetch step speaks for the platform: whatever exit code the
+  // project's own code ends with is a verdict on the code.
+  if (exitCode === EXIT_FETCH_FAILED && (outcome.step ?? 0) === 0) return { ...base, status: 'error', exitCode };
   if (exitCode === 124 || exitCode === 137) return { ...base, status: 'timeout', exitCode };
   return { ...base, status: 'failed', exitCode };
 }

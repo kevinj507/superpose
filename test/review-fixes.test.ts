@@ -243,3 +243,73 @@ describe('reopening after a conflict', () => {
     expect(await w.coord.notePush(b.id, again.token, resolved)).toMatchObject({ accepted: true, paths: ['src/shared.ts'], outside: [] });
   });
 });
+
+describe('second review fixes', () => {
+  it('a claim landing right now cannot be taken over, and a landing report after the claim moved on leaves it alone', async () => {
+    const w = await seeded();
+    const A = w.engine.addAssumption('a');
+    const c = w.engine.addClaim({ statement: 'c', scope: ['src/a/**'], restsOn: [A.id] });
+    const watcher = w.engine.addClaim({ statement: 'w', scope: ['notes/**'] });
+    await finished(w, c.id, { 'src/a/x.ts': 'x2' });
+    const landing = w.engine.beginNextLanding('main')!;
+    const wl = await w.coord.claim(watcher.id, 'watcher');
+    w.engine.verifyFinding(finding(w, watcher.id, wl.token, A.id).id);
+    expect(w.engine.ready().map((x) => x.id)).not.toContain(c.id);
+    await expect(w.coord.claim(c.id, 'thief')).rejects.toMatchObject({ code: 'not_ready' });
+    // Once the landing reports, the claim is the work it started with: landed, at risk.
+    w.engine.completeLanding('main', c.id, { status: 'landed', merge: 'm1' }, landing.landing);
+    expect(w.engine.getClaim(c.id).status).toBe('landed');
+  });
+
+  it('a commit too large to list completely cannot land, and a re-judged one is listed again in full', async () => {
+    const w = await seeded();
+    const c = w.engine.addClaim({ statement: 'c', scope: ['src/a/**'] });
+    const g = await w.coord.claim(c.id, 'a');
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 5001; i++) files[`src/a/f${String(i).padStart(4, '0')}.ts`] = String(i);
+    files['zz/evil.ts'] = 'outside';
+    const sha = w.host.commit(g.repo.name, files).after;
+    const row = await w.coord.inspectPush(c.id, { sha, ref: 'refs/heads/side', before: null });
+    expect(row).toMatchObject({ tooLarge: true, verdict: 'scope-violation', accepted: false });
+    const again = await w.coord.inspectPush(c.id, { sha, ref: 'refs/heads/main', before: null });
+    expect(again).toMatchObject({ accepted: true, verdict: 'scope-violation' });
+  }, 30_000);
+
+  it('a reopened claim is judged from the line head its holder was handed, or from its fork point until it has it', async () => {
+    const w = await seeded();
+    const a = w.engine.addClaim({ statement: 'a', scope: ['src/shared.ts'] });
+    const b = w.engine.addClaim({ statement: 'b', scope: ['src/shared.ts'], orderOverlaps: false });
+    const ga = await w.coord.claim(a.id, 'a');
+    const gb = await w.coord.claim(b.id, 'b');
+    for (const [c, g, text] of [[a, ga, 'from a'], [b, gb, 'from b']] as const) {
+      const sha = w.host.commit(g.repo.name, { 'src/shared.ts': text }).after;
+      await w.coord.notePush(c.id, g.token, sha);
+      w.engine.recordCheck(c.id, sha, { status: 'passed', exitCode: 0, startedAt: 0, finishedAt: 0 });
+      await w.coord.finish(c.id, g.token);
+    }
+    const la = w.engine.beginNextLanding('main')!;
+    const merged = w.host.merge('g.line.main', la.sha, 'land a') as { merge: string };
+    w.engine.completeLanding('main', a.id, { status: 'landed', merge: merged.merge }, la.landing);
+    const lb = w.engine.beginNextLanding('main')!;
+    w.engine.completeLanding('main', b.id, { status: 'conflict', files: ['src/shared.ts'] }, lb.landing);
+    w.engine.reopen(b.id);
+    // Something else lands meanwhile: the line moves on.
+    const later = w.host.commit('g.line.main', { 'src/c.ts': 'c' }).after;
+    const again = await w.coord.claim(b.id, 'b2');
+    expect(again.line!.head).toBe(later);
+    expect(w.engine.getClaim(b.id).baseSha).toBe(later);
+    // Not merged in yet: judged from where the repo was forked, so only b's own file counts.
+    const fix = w.host.commit(again.repo.name, { 'src/shared.ts': 'from b, again' }).after;
+    expect(await w.coord.notePush(b.id, again.token, fix)).toMatchObject({ accepted: true, outside: [] });
+    // The line token is revoked when the lease ends.
+    await w.coord.release(b.id, again.token);
+    expect(w.host.tokens('g.line.main').filter((t) => t.scope === 'read').every((t) => t.revoked)).toBe(true);
+  });
+
+  it('only the fetch step speaks for the platform: the project exiting 90 is a failure, not an error', async () => {
+    const { checkRunFrom } = await import('../src/core/checks');
+    const cfg = { check: 'npm test', timeoutSeconds: 60 };
+    expect(checkRunFrom({ exitCode: 90, stdout: '', stderr: '', ms: 1, step: 0 }, cfg, 0, 1).status).toBe('error');
+    expect(checkRunFrom({ exitCode: 90, stdout: '', stderr: '', ms: 1, step: 1 }, cfg, 0, 1).status).toBe('failed');
+  });
+});

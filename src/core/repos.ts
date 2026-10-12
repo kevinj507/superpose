@@ -108,6 +108,17 @@ export class UnknownCommitError extends Error {
 export const MAX_CHANGED_PATHS = 5000;
 
 export async function changedPaths(host: RepoHost, repo: string, before: string | null, after: string): Promise<string[]> {
+  return (await changedPathsChecked(host, repo, before, after)).paths;
+}
+
+// The same, saying whether the list was cut short at MAX_CHANGED_PATHS (a
+// commit that large cannot be shown to stay inside a scope).
+export async function changedPathsChecked(
+  host: RepoHost,
+  repo: string,
+  before: string | null,
+  after: string,
+): Promise<{ paths: string[]; tooLarge: boolean }> {
   const treeOf = async (sha: string | null) => {
     if (!sha || NO_COMMIT.test(sha)) return null;
     const commit = await host.readCommit(repo, sha);
@@ -117,7 +128,7 @@ export async function changedPaths(host: RepoHost, repo: string, before: string 
   const [a, b] = await Promise.all([treeOf(before), treeOf(after)]);
   const out: string[] = [];
   await diffTrees(host, repo, a, b, '', out);
-  return out.sort();
+  return { paths: out.sort(), tooLarge: out.length >= MAX_CHANGED_PATHS };
 }
 
 async function diffTrees(

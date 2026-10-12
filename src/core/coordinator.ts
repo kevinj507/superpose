@@ -1,6 +1,7 @@
 import { EngineError, type Engine, type RenewResult } from './engine';
 import {
   changedPaths,
+  changedPathsChecked,
   claimRepoName,
   commitsSince,
   lineRepoName,
@@ -36,6 +37,7 @@ export interface ClaimGrant {
 
 export interface RenewGrant extends RenewResult {
   git?: GitAccess;
+  line?: GitAccess & { head?: string }; // renewed read access to the line, for a reopened claim
 }
 
 // The claim lifecycle across the graph and the git host. The engine decides
@@ -80,10 +82,11 @@ export class Coordinator {
   }
 
   async claim(id: string, agent: string): Promise<ClaimGrant> {
-    const { revoke, ...lease } = this.tx((e) => e.claim(id, agent));
+    const { revoke, revokeLine, ...lease } = this.tx((e) => e.claim(id, agent));
     try {
       let c = this.tx((e) => e.getClaim(id));
       if (c.repo) await this.revokeAll(c.repo.name, revoke);
+      if (revokeLine) await this.revokeQuietly(revokeLine.repo, revokeLine.tokenId);
       if (!c.repo) {
         const line = await this.ensureLine(c.line);
         const fork = await this.host.fork(line.name, claimRepoName(this.opts.graph, id));
@@ -92,7 +95,13 @@ export class Coordinator {
       const grant: ClaimGrant = { ...lease, repo: c.repo!, baseSha: c.baseSha };
       // A stale claim gets no write access until it is re-planned.
       if (lease.status !== 'stale') grant.git = await this.grantGit(id, lease.token, lease.expiresAt, c.repo!);
-      if (c.rebase) grant.line = await this.lineRead(c.line, lease.expiresAt);
+      if (c.rebase) {
+        // Brought up to date from exactly the line head handed out here.
+        const line = await this.lineRead(c.line, lease.expiresAt);
+        c = this.tx((e) => e.attachLine(id, lease.token, line));
+        grant.line = { remote: line.remote, token: line.token, expiresAt: line.expiresAt, head: line.head };
+        grant.baseSha = c.baseSha;
+      }
       return grant;
     } catch (err) {
       await this.handBack(id, lease.token);
@@ -109,7 +118,14 @@ export class Coordinator {
     const c = this.tx((e) => e.getClaim(id));
     if (!c.repo) return result;
     try {
-      return { ...result, git: await this.grantGit(id, token, result.expiresAt!, c.repo) };
+      const grant: RenewGrant = { ...result, git: await this.grantGit(id, token, result.expiresAt!, c.repo) };
+      if (c.rebase && c.lease?.lineToken) {
+        const line = await this.lineRead(c.line, result.expiresAt!);
+        // The base stays where it was set when the claim was taken.
+        this.tx((e) => e.attachLine(id, token, { ...line, head: undefined }));
+        grant.line = { remote: line.remote, token: line.token, expiresAt: line.expiresAt, head: line.head };
+      }
+      return grant;
     } catch {
       // The lease is renewed; the previous git token still works until it
       // expires, and the next renewal tries again.
@@ -123,23 +139,29 @@ export class Coordinator {
   async finish(id: string, token: string): Promise<void> {
     const c = this.tx((e) => e.checkLease(id, token));
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
+    // Write access goes first, every token the lease ever held, so nothing can
+    // be pushed after the head is read: what is handed in is exactly what is
+    // in the repo, even if that is less than was pushed before.
+    const first = [...(c.lease?.git ? [c.lease.git.tokenId] : []), ...(c.lease?.retired ?? []).map((t) => t.tokenId)];
     if (c.repo && c.status === 'claimed') {
-      // Write access goes first, every token the lease ever held, so nothing
-      // can be pushed after the head is read: what is handed in is exactly
-      // what is in the repo, even if that is less than was pushed before.
-      await this.revokeAll(c.repo.name, [...(c.lease?.git ? [c.lease.git.tokenId] : []), ...(c.lease?.retired ?? []).map((t) => t.tokenId)]);
+      await this.revokeAll(c.repo.name, first);
       const seenAt = this.opts.now?.() ?? Date.now();
       const head = await this.host.readHead(c.repo.name);
       if (head && head !== c.baseSha) await this.inspectPush(id, { sha: head, ref: 'refs/heads/main', before: null });
       this.tx((e) => e.handIn(id, token, head, seenAt));
     }
-    this.tx((e) => e.finish(id, token));
+    // A renewal that ran while the repo was being read minted a token the
+    // first pass did not know of: everything the lease holds now goes too.
+    const { revoke, revokeLine } = this.tx((e) => e.finish(id, token));
+    if (c.repo) await this.revokeAll(c.repo.name, revoke.filter((t) => !first.includes(t) || c.status !== 'claimed'));
+    if (revokeLine) await this.revokeQuietly(revokeLine.repo, revokeLine.tokenId);
   }
 
   async release(id: string, token: string): Promise<void> {
     const c = this.tx((e) => e.getClaim(id));
-    const { revoke } = this.tx((e) => e.release(id, token));
+    const { revoke, revokeLine } = this.tx((e) => e.release(id, token));
     if (c.repo) await this.revokeAll(c.repo.name, revoke);
+    if (revokeLine) await this.revokeQuietly(revokeLine.repo, revokeLine.tokenId);
   }
 
   async replan(
@@ -169,20 +191,32 @@ export class Coordinator {
     // When the repo is read, so that of two inspections in flight the later
     // read decides the head.
     const seenAt = this.opts.now?.() ?? Date.now();
+    // A reopened claim is judged from the line head its holder was handed;
+    // until its repo holds that commit (the line not merged in yet), from
+    // where the repo was forked.
+    let base = c.baseSha ?? null;
+    if (base && base !== c.forkSha && !(await this.host.readCommit(c.repo.name, base))) base = c.forkSha ?? null;
     if (known) {
-      // Seen before but refused: judge it again as it stands now.
-      const head = await this.host.readHead(c.repo.name);
+      // Seen before but refused: judge it again as it stands now, from the
+      // complete list of files if the stored one was cut short.
+      const [listed, head] = await Promise.all([
+        known.pathCount || known.tooLarge
+          ? changedPathsChecked(this.host, c.repo.name, base, push.sha)
+          : Promise.resolve({ paths: known.paths, tooLarge: false }),
+        this.host.readHead(c.repo.name),
+      ]);
       return this.tx((e) =>
-        e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths: known.paths, isHead: head === push.sha, seenAt }),
+        e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths: listed.paths, tooLarge: listed.tooLarge, isHead: head === push.sha, seenAt }),
       );
     }
     let paths: string[];
+    let tooLarge = false;
     let head: string | null;
     try {
-      [paths, head] = await Promise.all([
-        changedPaths(this.host, c.repo.name, c.baseSha ?? null, push.sha),
-        this.host.readHead(c.repo.name),
-      ]);
+      let listed: { paths: string[]; tooLarge: boolean };
+      [listed, head] = await Promise.all([changedPathsChecked(this.host, c.repo.name, base, push.sha), this.host.readHead(c.repo.name)]);
+      paths = listed.paths;
+      tooLarge = listed.tooLarge;
     } catch (err) {
       if (err instanceof UnknownCommitError) throw new EngineError('unknown_commit', err.message);
       throw err;
@@ -192,7 +226,7 @@ export class Coordinator {
     const commits = await commitsSince(this.host, c.repo.name, c.baseSha ?? null, push.sha);
     const unattributed = commits.filter((m) => !trailerClaims(m.message).includes(id)).map((m) => m.sha);
     return this.tx((e) =>
-      e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths, isHead: head === push.sha, seenAt, unattributed }),
+      e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths, tooLarge, isHead: head === push.sha, seenAt, unattributed }),
     );
   }
 
@@ -230,8 +264,9 @@ export class Coordinator {
   private async handBack(id: string, leaseToken: string) {
     try {
       const repo = this.tx((e) => e.getClaim(id)).repo;
-      const { revoke } = this.tx((e) => e.release(id, leaseToken));
+      const { revoke, revokeLine } = this.tx((e) => e.release(id, leaseToken));
       if (repo) await this.revokeAll(repo.name, revoke);
+      if (revokeLine) await this.revokeQuietly(revokeLine.repo, revokeLine.tokenId);
     } catch {
       // Already released or expired: nothing to hand back.
     }
@@ -242,11 +277,11 @@ export class Coordinator {
   }
 
   // Read access to a line for as long as the lease lasts.
-  private async lineRead(line: string, leaseEnds: number): Promise<GitAccess & { head?: string }> {
+  private async lineRead(line: string, leaseEnds: number) {
     const repo = await this.ensureLine(line);
     const now = this.opts.now?.() ?? Date.now();
     const t = await this.host.mintToken(repo.name, 'read', Math.max(60, Math.floor((leaseEnds - now) / 1000) - 1));
-    return { remote: repo.remote, token: t.secret, expiresAt: t.expiresAt, head: repo.head };
+    return { repo: repo.name, tokenId: t.id, remote: repo.remote, token: t.secret, expiresAt: t.expiresAt, head: repo.head };
   }
 
   // Revoking is hygiene, not safety: every token expires with its lease anyway.

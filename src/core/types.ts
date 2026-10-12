@@ -34,6 +34,8 @@ export interface Lease {
   // Tokens it replaced at renewals: left to lapse (a push may be in flight),
   // and revoked with the current one when the lease ends.
   retired?: { tokenId: string; expiresAt: number }[];
+  // For a reopened claim: the read token on its line, revoked with the rest.
+  lineToken?: { repo: string; tokenId: string; expiresAt: number };
 }
 
 // Getting a finished claim into its line: one at a time per line, in
@@ -94,6 +96,7 @@ export interface Claim {
   line: string; // the line (one reality's code) this claim builds on and lands into
   repo?: RepoRef; // the claim's own fork of its line, made when first claimed
   baseSha?: string;
+  forkSha?: string; // the commit the claim's repo was forked at (baseSha moves on a reopen)
   headSha?: string;
   headSeenAt?: number; // when the repo was last seen with headSha as its tip
   finishedAt?: number;
@@ -168,6 +171,7 @@ export interface PushRecord {
   outside: string[]; // of those, the ones outside the declared scope (the first 500)
   pathCount?: number; // when more were changed than are listed
   outsideCount?: number;
+  tooLarge?: boolean; // more files changed than can be checked: it cannot land
   accepted: boolean; // became the claim's head
   reason?: 'stale' | 'not-head' | 'other-branch' | 'not-claimed';
   verdict: Verdict;

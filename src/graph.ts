@@ -205,14 +205,18 @@ export class Graph extends DurableObject<Env> {
           continue;
         }
         try {
-          await this.env.LANDINGS!.create({ id: landing, params: { graph, line, claim, sha, landing } });
+          // Workflow instance ids are shared by every graph: name the graph.
+          await this.env.LANDINGS!.create({ id: `${graph}-${landing}`, params: { graph, line, claim, sha, landing } });
+          // If this landing never reports (its Workflow was lost), an alarm
+          // comes back to give up on it and move the line on.
+          await this.alarmBy(Date.now() + LANDING_TIMEOUT_MS + 60_000);
         } catch (err) {
           // Created by an earlier try whose answer was lost: it is running.
           if (/already exists/i.test(String(err))) break;
           // Not started: back in the queue without using up an attempt, and
           // tried again shortly.
           this.run((e) => e.abortLanding(line, claim, landing));
-          await this.ctx.storage.setAlarm(Date.now() + 30_000);
+          await this.alarmBy(Date.now() + 30_000);
         }
         break;
       }
@@ -233,7 +237,13 @@ export class Graph extends DurableObject<Env> {
     return { graph, started: true };
   }
 
-  // Retry landings that could not be started.
+  private async alarmBy(at: number) {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > at) await this.ctx.storage.setAlarm(at);
+  }
+
+  // Retry landings that could not be started, and give up on ones that never
+  // reported back.
   async alarm() {
     const graph = this.ctx.storage.kv.get<string>('graph');
     if (graph) await this.pumpLandings(graph);

@@ -10,6 +10,7 @@ import type {
   GraphNode,
   KeptBranch,
   LandingState,
+  Lease,
   Line,
   Notice,
   PushRecord,
@@ -225,7 +226,10 @@ export class Engine {
     return this.claims().filter(
       (c) =>
         this.isReady(c.id) ||
-        ((c.status === 'claimed' || c.status === 'stale') && (!c.lease || c.lease.expiresAt <= now) && this.dependenciesMet(c.id)),
+        ((c.status === 'claimed' || c.status === 'stale') &&
+          (!c.lease || c.lease.expiresAt <= now) &&
+          c.landing?.status !== 'landing' &&
+          this.dependenciesMet(c.id)),
     );
   }
 
@@ -233,11 +237,17 @@ export class Engine {
 
   // Take a claim. A lapsed lease can be taken over; so can a stale claim whose
   // agent is gone, but it stays stale until its new holder re-plans it.
-  claim(id: string, agent: string): { token: string; expiresAt: number; status: ClaimStatus; revoke: string[] } {
+  claim(
+    id: string,
+    agent: string,
+  ): { token: string; expiresAt: number; status: ClaimStatus; revoke: string[]; revokeLine?: Lease['lineToken'] } {
     const c = this.claimNode(id);
     const now = this.clock.now();
     const free = !c.lease || c.lease.expiresAt <= now;
-    const takeover = free && (c.status === 'claimed' || c.status === 'stale') && this.dependenciesMet(id);
+    // A claim whose landing is in flight is not taken over: the landing's
+    // report is about the work it started with.
+    const takeover =
+      free && (c.status === 'claimed' || c.status === 'stale') && c.landing?.status !== 'landing' && this.dependenciesMet(id);
     if (!this.isReady(id) && !takeover) throw new EngineError('not_ready', `claim ${id} is not ready`);
     if (c.line !== 'main' && !this.store.getLine(c.line)) {
       throw new EngineError('no_line', `line ${c.line} does not exist yet; create it before claiming work on it`);
@@ -259,14 +269,14 @@ export class Engine {
     }
     this.store.putNode({ ...c, status, lease });
     // The previous holder's git tokens, if any, are revoked by the caller.
-    return { token: lease.token, expiresAt: lease.expiresAt, status, revoke: tokensOf(c) };
+    return { token: lease.token, expiresAt: lease.expiresAt, status, revoke: tokensOf(c), revokeLine: c.lease?.lineToken };
   }
 
   // The claim's repo, made after the lease was granted. The base commit is the
   // line's tip at the moment of forking, unless the planner fixed one.
   attachRepo(id: string, token: string, repo: RepoRef, baseSha?: string): Claim {
     const c = this.held(id, token);
-    const next: Claim = { ...c, repo, baseSha: c.baseSha ?? baseSha };
+    const next: Claim = { ...c, repo, baseSha: c.baseSha ?? baseSha, forkSha: baseSha };
     this.store.putNode(next);
     return next;
   }
@@ -282,10 +292,24 @@ export class Engine {
   }
 
   // Hand a claim back before its lease ends. Returns the git tokens to revoke.
-  release(id: string, token: string): { revoke: string[] } {
+  release(id: string, token: string): { revoke: string[]; revokeLine?: Lease['lineToken'] } {
     const c = this.held(id, token);
     this.store.putNode({ ...c, status: this.openOrStale(c), lease: undefined, deliveredSeq: c.lease!.cursor });
-    return { revoke: tokensOf(c) };
+    return { revoke: tokensOf(c), revokeLine: c.lease!.lineToken };
+  }
+
+  // A reopened claim's holder was handed the line at `head`: from now on the
+  // claim's changes are judged from there, and the read token goes on the
+  // lease to be revoked with the others.
+  attachLine(id: string, token: string, line: { repo: string; tokenId: string; expiresAt: number; head?: string }): Claim {
+    const c = this.held(id, token);
+    const next: Claim = {
+      ...c,
+      baseSha: line.head ?? c.baseSha,
+      lease: { ...c.lease!, lineToken: { repo: line.repo, tokenId: line.tokenId, expiresAt: line.expiresAt } },
+    };
+    this.store.putNode(next);
+    return next;
   }
 
   // The renewal reply is how a running agent learns the world moved: it
@@ -330,6 +354,7 @@ export class Engine {
       isHead: boolean;
       seenAt?: number; // when the repo was read and found with this commit as its tip
       unattributed?: string[];
+      tooLarge?: boolean; // the list of changed files was cut short
     },
   ): PushRecord {
     const c = this.claimNode(id);
@@ -341,9 +366,19 @@ export class Engine {
       // branch, or out of order) is accepted once the reason no longer holds.
       if (existing.accepted || reason) return existing;
       const { reason: _was, ...rest } = existing;
-      // Judged against the scope as it is now: a re-plan may have changed it.
-      const outside = outOfScope(existing.paths, c.scope);
-      const upgraded: PushRecord = { ...rest, ref: input.ref, accepted: true, outside, verdict: verdictFor(outside, existing.checks) };
+      // Judged against the scope as it is now (a re-plan may have changed
+      // it), from the complete list of files the caller read again.
+      const outside = outOfScope(input.paths, c.scope);
+      const tooLarge = !!(input.tooLarge || existing.tooLarge);
+      const upgraded: PushRecord = {
+        ...rest,
+        ref: input.ref,
+        accepted: true,
+        outside: outside.slice(0, MAX_STORED_PATHS),
+        verdict: tooLarge ? 'scope-violation' : verdictFor(outside, existing.checks),
+      };
+      if (outside.length > MAX_STORED_PATHS) upgraded.outsideCount = outside.length;
+      else delete upgraded.outsideCount;
       this.store.putPush(upgraded);
       this.store.putNode({ ...c, headSha: input.sha, headSeenAt: seenAt, pushes: c.pushes + 1 });
       this.notifyTouched(c, outside, input.sha);
@@ -361,8 +396,11 @@ export class Engine {
       paths: input.paths.slice(0, MAX_STORED_PATHS),
       outside: outside.slice(0, MAX_STORED_PATHS),
       accepted: !reason,
-      verdict: outside.length ? 'scope-violation' : 'unverified',
+      // A commit too large to list completely cannot be shown to stay in
+      // scope, so it cannot land.
+      verdict: outside.length || input.tooLarge ? 'scope-violation' : 'unverified',
     };
+    if (input.tooLarge) row.tooLarge = true;
     if (reason) row.reason = reason;
     if (input.paths.length > MAX_STORED_PATHS) row.pathCount = input.paths.length;
     if (outside.length > MAX_STORED_PATHS) row.outsideCount = outside.length;
@@ -451,7 +489,7 @@ export class Engine {
 
   // Finish a claim. Returns the git tokens to revoke: the work is handed in.
   // A landing that failed before starts afresh.
-  finish(id: string, token: string): { revoke: string[] } {
+  finish(id: string, token: string): { revoke: string[]; revokeLine?: Lease['lineToken'] } {
     const c = this.held(id, token);
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
     this.store.putNode({
@@ -463,7 +501,7 @@ export class Engine {
       landing: undefined,
       rebase: undefined,
     });
-    return { revoke: tokensOf(c) };
+    return { revoke: tokensOf(c), revokeLine: c.lease!.lineToken };
   }
 
   // What the agent hands in at finish is what its repo holds: `sha` (already
@@ -615,14 +653,23 @@ export class Engine {
     const c = this.claimNode(id);
     const current = line.landing?.claim === id && (!landing || line.landing.id === landing);
     if (!current) return false;
+    const started = line.landing!.sha;
     this.store.putLine({ ...line, landing: undefined });
+    // Is the claim still the work this landing started with?
+    const same = (c.status === 'done' || c.status === 'stale') && !c.lease && c.headSha === started;
     if (outcome.status === 'landed') {
-      // What git did is recorded whatever happened meanwhile. A claim made
-      // stale while landing is now landed work at risk.
-      const atRisk = c.status === 'stale';
-      this.markLanded(id, outcome.merge, lineName);
-      if (atRisk) this.emit('reality.at_risk', [id], { line: lineName, merge: outcome.merge, landedWhileStale: true });
-    } else if (c.status === 'done' || c.status === 'stale') this.failLanding(id, outcome);
+      if (same) {
+        // A claim made stale while landing is now landed work at risk.
+        const atRisk = c.status === 'stale';
+        this.markLanded(id, outcome.merge, lineName);
+        if (atRisk) this.emit('reality.at_risk', [id], { line: lineName, merge: outcome.merge, landedWhileStale: true });
+      } else {
+        // The claim has moved on since: what git did is recorded on the
+        // line, and the claim is left as it is now.
+        this.store.putLine({ ...this.line(lineName), head: outcome.merge });
+        this.emit('reality.at_risk', [id], { line: lineName, merge: outcome.merge, landedEarlierWork: started });
+      }
+    } else if (same) this.failLanding(id, outcome);
     return true;
   }
 
@@ -917,6 +964,12 @@ export class Engine {
     const c = this.claimNode(id);
     const row = this.store.getPush(id, sha);
     if (!row) return;
+    // The stored list was cut short: it cannot show the commit stays inside
+    // the new scope, so it does not land; the agent pushes again.
+    if (row.pathCount || row.tooLarge) {
+      this.store.putPush({ ...row, verdict: 'scope-violation' });
+      return;
+    }
     const outside = outOfScope(row.paths, c.scope);
     this.store.putPush({ ...row, outside, verdict: verdictFor(outside, row.checks) });
   }

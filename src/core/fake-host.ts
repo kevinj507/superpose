@@ -58,6 +58,7 @@ export class FakeRepoHost implements RepoHost {
     if (existing) return this.describe(existing);
     const repo: StoredRepo = { name };
     this.kv.put(`repo:${name}`, repo);
+    this.kv.put(`objects:${name}`, []);
     this.index(name, true);
     return this.describe(repo);
   }
@@ -71,6 +72,8 @@ export class FakeRepoHost implements RepoHost {
     if (!src) throw hostError('NOT_FOUND', `no repo ${source}`);
     const repo: StoredRepo = { name, head: src.head, source };
     this.kv.put(`repo:${name}`, repo);
+    // A fork holds the commits its source held then, and nothing made there later.
+    this.kv.put(`objects:${name}`, this.kv.get<string[]>(`objects:${source}`) ?? []);
     this.index(name, true);
     return this.describe(repo);
   }
@@ -101,8 +104,11 @@ export class FakeRepoHost implements RepoHost {
     if (token && token.repo === repo) this.kv.put(`token:${tokenId}`, { ...token, revoked: true });
   }
 
+  // Objects are per repo, as on Artifacts: a commit another repo has is not
+  // readable here until it is pushed or fetched in.
   async readCommit(repo: string, sha: string): Promise<HostCommit | null> {
     if (!this.repo(repo)) throw hostError('NOT_FOUND', `no repo ${repo}`);
+    if (!this.has(repo, sha)) return null;
     return this.kv.get<HostCommit>(`commit:${sha}`) ?? null;
   }
 
@@ -163,6 +169,7 @@ export class FakeRepoHost implements RepoHost {
     const sha = hash(`commit ${tree} ${parents.join(' ')} ${message} ${this.clock.now()}`);
     this.kv.put(`commit:${sha}`, { sha, tree, parents, message } satisfies HostCommit);
     this.kv.put(`repo:${repo}`, { ...r, head: sha });
+    this.receive(repo, sha);
     return { before: r.head ?? null, after: sha, message };
   }
 
@@ -195,6 +202,7 @@ export class FakeRepoHost implements RepoHost {
     const merge = hash(`commit ${tree} ${parents.join(' ')} ${message} ${this.clock.now()}`);
     this.kv.put(`commit:${merge}`, { sha: merge, tree, parents, message } satisfies HostCommit);
     this.kv.put(`repo:${into}`, { ...r, head: merge });
+    this.receive(into, merge);
     return { merge };
   }
 
@@ -203,6 +211,7 @@ export class FakeRepoHost implements RepoHost {
     const r = this.repo(repo);
     if (!r) throw hostError('NOT_FOUND', `no repo ${repo}`);
     this.kv.put(`repo:${repo}`, { ...r, head: sha });
+    this.receive(repo, sha);
   }
 
   head(repo: string): string | undefined {
@@ -232,6 +241,24 @@ export class FakeRepoHost implements RepoHost {
   }
 
   // ---- internals -------------------------------------------------------------
+
+  // The repo now holds `sha` and everything it was built from (what a push or
+  // fetch of it brings in).
+  private receive(repo: string, sha: string) {
+    const held = new Set(this.kv.get<string[]>(`objects:${repo}`) ?? []);
+    const walk = [sha];
+    while (walk.length) {
+      const s = walk.pop()!;
+      if (held.has(s)) continue;
+      held.add(s);
+      walk.push(...(this.kv.get<HostCommit>(`commit:${s}`)?.parents ?? []));
+    }
+    this.kv.put(`objects:${repo}`, [...held]);
+  }
+
+  private has(repo: string, sha: string): boolean {
+    return (this.kv.get<string[]>(`objects:${repo}`) ?? []).includes(sha);
+  }
 
   private commonAncestor(a: string, b: string): string | undefined {
     const seen = new Set<string>();

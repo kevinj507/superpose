@@ -71,11 +71,14 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
     try {
       run = await step.do(
         'run the checks on the exact commit',
-        { retries: { limit: 2, delay: '30 seconds', backoff: 'linear' }, timeout: `${config.timeoutSeconds * 2 + 300} seconds` },
+        // Room for placing a container (up to five minutes) and both steps.
+        { retries: { limit: 2, delay: '30 seconds', backoff: 'linear' }, timeout: `${(config.timeoutSeconds * 2 + 60) * 2 + 420} seconds` },
         async (): Promise<CheckRun> => {
-          // A container of its own for this run.
+          // A container of its own for each attempt: a timed-out attempt may
+          // still be running in the last one.
+          const attempt = crypto.randomUUID();
           const exec = (job: ExecJob) =>
-            this.env.CHECKER.get(this.env.CHECKER.idFromName(`check:${graph}:${claim}:${record.sha}:${event.instanceId}`)).run(job);
+            this.env.CHECKER.get(this.env.CHECKER.idFromName(`check:${graph}:${claim}:${record.sha}:${attempt}`)).run(job);
           const result = await runCheck(host, exec, repo, record.sha, config);
           // The platform failing (no container, no fetch) is retried; the
           // code failing is a verdict.

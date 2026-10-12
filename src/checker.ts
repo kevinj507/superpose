@@ -19,7 +19,9 @@ export class Checker extends DurableObject<Env> {
     let stderr = '';
     try {
       let exitCode: number | null = 0;
+      let index = -1;
       for (const step of job.steps) {
+        index++;
         // Each step is its own process with its own environment, so a later
         // step never sees an earlier one's token.
         const proc = await container.exec(['sh', '-c', step.script], { env: step.env, cwd: '/' });
@@ -37,7 +39,7 @@ export class Checker extends DurableObject<Env> {
         exitCode = out.exitCode;
         if (exitCode !== 0) break;
       }
-      return { exitCode, stdout, stderr, ms: Date.now() - started };
+      return { exitCode, stdout, stderr, ms: Date.now() - started, step: index };
     } catch (err) {
       return { exitCode: null, stdout, stderr, ms: Date.now() - started, error: String(err) };
     } finally {
