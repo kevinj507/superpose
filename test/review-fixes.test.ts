@@ -313,3 +313,53 @@ describe('second review fixes', () => {
     expect(checkRunFrom({ exitCode: 90, stdout: '', stderr: '', ms: 1, step: 1 }, cfg, 0, 1).status).toBe('failed');
   });
 });
+
+describe('final review fixes', () => {
+  it('a reopened claim that merged a newer line head is judged only on its own changes', async () => {
+    const w = await seeded();
+    const a = w.engine.addClaim({ statement: 'a', scope: ['src/shared.ts'] });
+    const b = w.engine.addClaim({ statement: 'b', scope: ['src/shared.ts'], orderOverlaps: false });
+    const o = w.engine.addClaim({ statement: 'o', scope: ['src/b/**'] });
+    const ga = await w.coord.claim(a.id, 'a');
+    const gb = await w.coord.claim(b.id, 'b');
+    for (const [c, g, text] of [[a, ga, 'from a'], [b, gb, 'from b']] as const) {
+      const sha = w.host.commit(g.repo.name, { 'src/shared.ts': text }).after;
+      await w.coord.notePush(c.id, g.token, sha);
+      w.engine.recordCheck(c.id, sha, { status: 'passed', exitCode: 0, startedAt: 0, finishedAt: 0 });
+      await w.coord.finish(c.id, g.token);
+    }
+    const la = w.engine.beginNextLanding('main')!;
+    const m1 = (w.host.merge('g.line.main', la.sha, 'land a') as { merge: string }).merge;
+    w.engine.completeLanding('main', a.id, { status: 'landed', merge: m1 }, la.landing);
+    const lb = w.engine.beginNextLanding('main')!;
+    w.engine.completeLanding('main', b.id, { status: 'conflict', files: ['src/shared.ts'] }, lb.landing);
+    w.engine.reopen(b.id);
+    const again = await w.coord.claim(b.id, 'b2');
+    // Meanwhile another claim lands on the line.
+    const go = await w.coord.claim(o.id, 'o');
+    const os = w.host.commit(go.repo.name, { 'src/b/y.ts': 'from o' }).after;
+    await w.coord.notePush(o.id, go.token, os);
+    w.engine.recordCheck(o.id, os, { status: 'passed', exitCode: 0, startedAt: 0, finishedAt: 0 });
+    await w.coord.finish(o.id, go.token);
+    const lo = w.engine.beginNextLanding('main')!;
+    const m2 = (w.host.merge('g.line.main', lo.sha, 'land o') as { merge: string }).merge;
+    w.engine.completeLanding('main', o.id, { status: 'landed', merge: m2 }, lo.landing);
+    // b2 merges the newest line head into its repo, resolves, and pushes.
+    expect('conflict' in w.host.merge(again.repo.name, m2, 'bring b up to date')).toBe(true);
+    const resolved = w.host.merge(again.repo.name, m2, 'bring b up to date', { 'src/shared.ts': 'from a and b' }) as { merge: string };
+    const row = await w.coord.notePush(b.id, again.token, resolved.merge);
+    // o's src/b/y.ts came in with the line: it is not b's change.
+    expect(row).toMatchObject({ accepted: true, outside: [], paths: ['src/shared.ts'] });
+  });
+
+  it('running checks again never clears a scope verdict', () => {
+    const clock = { t: 1, now() { return this.t; } };
+    let n = 0;
+    const engine = new Engine(new MemoryStore(), clock, { leaseMs: 60_000, hedgeMs: 1, newToken: () => `t${++n}` });
+    const c = engine.addClaim({ statement: 'c', scope: ['src/**'] });
+    engine.claim(c.id, 'a');
+    engine.recordPush(c.id, { sha: 'big', ref: 'refs/heads/main', before: null, paths: ['src/a.ts'], isHead: true, tooLarge: true });
+    engine.clearChecks(c.id, 'big');
+    expect(engine.pushRecord(c.id, 'big')).toMatchObject({ verdict: 'scope-violation' });
+  });
+});

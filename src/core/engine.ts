@@ -453,7 +453,9 @@ export class Engine {
     const row = this.store.getPush(id, sha);
     if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
     const { checks: _gone, ...rest } = row;
-    this.store.putPush({ ...rest, verdict: row.outside.length ? 'scope-violation' : 'unverified' });
+    // Only what the checks said is forgotten; a scope verdict is about the
+    // files, and stays.
+    this.store.putPush({ ...rest, verdict: row.verdict === 'scope-violation' ? 'scope-violation' : 'unverified' });
   }
 
   pushRecord(id: string, sha: string): PushRecord | undefined {

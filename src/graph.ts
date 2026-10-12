@@ -187,8 +187,16 @@ export class Graph extends DurableObject<Env> {
     return this.run((e) => e.beginCheck(id, sha, command, owner));
   }
 
-  // Start the next landing on every line that has none in flight.
+  // Start the next landing on every line that has none in flight, and keep
+  // an alarm set for the oldest landing still in flight, so one that never
+  // reports is given up on.
   async pumpLandings(graph: string) {
+    await this.startLandings(graph);
+    const oldest = Math.min(...this.engine.lines().map((l) => l.landing?.startedAt ?? Infinity));
+    if (Number.isFinite(oldest)) await this.alarmBy(oldest + LANDING_TIMEOUT_MS + 60_000);
+  }
+
+  private async startLandings(graph: string) {
     const lines = new Set(this.engine.claims().map((c) => c.line));
     for (const line of lines) {
       for (;;) {
@@ -207,9 +215,6 @@ export class Graph extends DurableObject<Env> {
         try {
           // Workflow instance ids are shared by every graph: name the graph.
           await this.env.LANDINGS!.create({ id: `${graph}-${landing}`, params: { graph, line, claim, sha, landing } });
-          // If this landing never reports (its Workflow was lost), an alarm
-          // comes back to give up on it and move the line on.
-          await this.alarmBy(Date.now() + LANDING_TIMEOUT_MS + 60_000);
         } catch (err) {
           // Created by an earlier try whose answer was lost: it is running.
           if (/already exists/i.test(String(err))) break;

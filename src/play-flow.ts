@@ -30,9 +30,12 @@ const PLAY_SCRIPT = `
 set -u
 cd /play || exit 1
 node runner/plan.mjs scenarios/world --graph "$GRAPH" || exit 1
-node runner/play-director.mjs --graph "$GRAPH" --hedge 20 --timeout 2100 > /tmp/director.log 2>&1 &
-node runner/run.mjs --graph "$GRAPH" --agents 4 --agent scripted --hold 6 --quiet --patience 600 --work /tmp/work --runs /tmp/runs
-wait
+node runner/play-director.mjs --graph "$GRAPH" --hedge 20 --timeout 900 > /tmp/director.log 2>&1 &
+director=$!
+node runner/run.mjs --graph "$GRAPH" --agents 4 --agent scripted --hold 6 --quiet --patience 300 --work /tmp/work --runs /tmp/runs
+# The agents are done: give the director two minutes to switch, then stop.
+( sleep 120; kill $director 2>/dev/null ) &
+wait $director
 echo "--- director"
 tail -n 20 /tmp/director.log
 `;
@@ -54,9 +57,10 @@ function fileSteps(): ExecJob['steps'] {
 export class PlayFlow extends WorkflowEntrypoint<Env, PlayParams> {
   async run(event: WorkflowEvent<PlayParams>, step: WorkflowStep) {
     const { graph, url } = event.payload;
+    // Whatever happens to the run, the graph is deleted afterwards.
     const result = await step.do(
       'plan a world and run agents on it in a container',
-      { retries: { limit: 0, delay: '1 second' }, timeout: '45 minutes' },
+      { retries: { limit: 0, delay: '1 second' }, timeout: '60 minutes' },
       async () => {
         const stub = this.env.CHECKER.get(this.env.CHECKER.idFromName(`play:${graph}`));
         const out = await stub.run({
@@ -77,11 +81,13 @@ export class PlayFlow extends WorkflowEntrypoint<Env, PlayParams> {
         });
         return { exitCode: out.exitCode, log: tail(`${out.stdout}\n${out.stderr}${out.error ? `\n${out.error}` : ''}`, 3000) };
       },
-    );
+    ).catch((err) => ({ exitCode: null, log: `the run failed: ${String(err)}`.slice(0, 3000) }));
     await step.sleep('keep the graph for people to look at', '2 hours');
-    await step.do('delete the graph', async () => {
+    await step.do('delete the graph', { retries: { limit: 5, delay: '1 minute', backoff: 'exponential' } }, async () => {
       const r = await this.env.GRAPH.get(this.env.GRAPH.idFromName(graph)).destroy(graph);
-      return r.ok;
+      // Thrown, so the deletion is tried again until every repo is gone.
+      if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+      return true;
     });
     return result;
   }

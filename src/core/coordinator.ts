@@ -96,9 +96,14 @@ export class Coordinator {
       // A stale claim gets no write access until it is re-planned.
       if (lease.status !== 'stale') grant.git = await this.grantGit(id, lease.token, lease.expiresAt, c.repo!);
       if (c.rebase) {
-        // Brought up to date from exactly the line head handed out here.
+        // Read access to the line, to bring the claim up to date with it.
         const line = await this.lineRead(c.line, lease.expiresAt);
-        c = this.tx((e) => e.attachLine(id, lease.token, line));
+        try {
+          c = this.tx((e) => e.attachLine(id, lease.token, line));
+        } catch (err) {
+          await this.revokeQuietly(line.repo, line.tokenId);
+          throw err;
+        }
         grant.line = { remote: line.remote, token: line.token, expiresAt: line.expiresAt, head: line.head };
         grant.baseSha = c.baseSha;
       }
@@ -118,14 +123,9 @@ export class Coordinator {
     const c = this.tx((e) => e.getClaim(id));
     if (!c.repo) return result;
     try {
-      const grant: RenewGrant = { ...result, git: await this.grantGit(id, token, result.expiresAt!, c.repo) };
-      if (c.rebase && c.lease?.lineToken) {
-        const line = await this.lineRead(c.line, result.expiresAt!);
-        // The base stays where it was set when the claim was taken.
-        this.tx((e) => e.attachLine(id, token, { ...line, head: undefined }));
-        grant.line = { remote: line.remote, token: line.token, expiresAt: line.expiresAt, head: line.head };
-      }
-      return grant;
+      // (A reopened claim's read token on its line is minted once, when it
+      // is taken; the runner merges the line in straight away.)
+      return { ...result, git: await this.grantGit(id, token, result.expiresAt!, c.repo) };
     } catch {
       // The lease is renewed; the previous git token still works until it
       // expires, and the next renewal tries again.
@@ -191,11 +191,10 @@ export class Coordinator {
     // When the repo is read, so that of two inspections in flight the later
     // read decides the head.
     const seenAt = this.opts.now?.() ?? Date.now();
-    // A reopened claim is judged from the line head its holder was handed;
-    // until its repo holds that commit (the line not merged in yet), from
-    // where the repo was forked.
-    let base = c.baseSha ?? null;
-    if (base && base !== c.forkSha && !(await this.host.readCommit(c.repo.name, base))) base = c.forkSha ?? null;
+    // A reopened claim is judged from the newest line commit its push
+    // contains: the base its landing's `git merge` will use. Line work merged
+    // in is then not the claim's own change, whichever line head it merged.
+    const base = c.rebase ? await this.lineBase(c, push.sha) : (c.baseSha ?? null);
     if (known) {
       // Seen before but refused: judge it again as it stands now, from the
       // complete list of files if the stored one was cut short.
@@ -270,6 +269,35 @@ export class Coordinator {
     } catch {
       // Already released or expired: nothing to hand back.
     }
+  }
+
+  // The newest commit of the claim's line that `sha` contains (newest by the
+  // line's own order), or where the claim was forked if none is found.
+  private async lineBase(c: Claim, sha: string): Promise<string | null> {
+    const lineRepo = this.tx((e) => e.line(c.line).repo?.name);
+    if (!lineRepo || !c.repo) return c.forkSha ?? c.baseSha ?? null;
+    const order = new Map<string, number>();
+    let cur: string | null | undefined = await this.host.readHead(lineRepo);
+    for (let i = 0; cur && i < 300; i++) {
+      order.set(cur, i);
+      cur = (await this.host.readCommit(lineRepo, cur))?.parents[0];
+    }
+    let best: string | null = null;
+    const seen = new Set<string>();
+    const queue = [sha];
+    while (queue.length && seen.size < 500) {
+      const s = queue.shift()!;
+      if (seen.has(s)) continue;
+      seen.add(s);
+      const rank = order.get(s);
+      if (rank !== undefined) {
+        // A line commit: older ones behind it can only rank lower.
+        if (best === null || rank < order.get(best)!) best = s;
+        continue;
+      }
+      queue.push(...((await this.host.readCommit(c.repo.name, s))?.parents ?? []));
+    }
+    return best ?? c.forkSha ?? c.baseSha ?? null;
   }
 
   private async revokeAll(repo: string, tokenIds: string[]) {

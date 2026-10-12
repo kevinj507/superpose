@@ -203,7 +203,9 @@ export default {
     if (url.pathname === '/api/play' && request.method === 'POST') {
       const lobby = env.GRAPH.get(env.GRAPH.idFromName('__playground'));
       try {
-        return json(200, await lobby.playLobby(url.origin));
+        // The container talks back over https to this host, whatever scheme
+        // the visitor used: the platform's own tokens travel on that line.
+        return json(200, await lobby.playLobby(`https://${url.host}`));
       } catch (err) {
         return json(503, { error: 'unavailable', message: `the playground could not start: ${String(err)}` });
       }

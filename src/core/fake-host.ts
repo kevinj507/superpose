@@ -173,10 +173,11 @@ export class FakeRepoHost implements RepoHost {
     return { before: r.head ?? null, after: sha, message };
   }
 
-  // Merge `sha` (from any repo: objects are shared here) into `into`'s head,
-  // as a merge commit. A file changed differently on both sides since their
-  // common ancestor is a conflict, and nothing is written.
-  merge(into: string, sha: string, message: string): { merge: string } | { conflict: string[] } {
+  // Merge `sha` (from any repo) into `into`'s head, as a merge commit. A file
+  // changed differently on both sides since their common ancestor is a
+  // conflict, and nothing is written, unless `resolve` gives its content (as
+  // an agent resolving the conflict would).
+  merge(into: string, sha: string, message: string, resolve: Record<string, string> = {}): { merge: string } | { conflict: string[] } {
     const r = this.repo(into);
     if (!r) throw hostError('NOT_FOUND', `no repo ${into}`);
     const ours = r.head;
@@ -194,7 +195,8 @@ export class FakeRepoHost implements RepoHost {
       if (m === b) {
         if (t === undefined) out.delete(path);
         else out.set(path, t);
-      } else conflict.push(path);
+      } else if (path in resolve) out.set(path, resolve[path]!);
+      else conflict.push(path);
     }
     if (conflict.length) return { conflict: conflict.sort() };
     const tree = this.writeTree(out);
