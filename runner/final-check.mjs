@@ -5,6 +5,10 @@
 // arm's runner does the same for its main branch (runner/plain.mjs).
 //
 //   node runner/final-check.mjs --graph <gid> [--line main] --hidden <path/to/check.mjs> [--out <file.json>]
+//                               [--wait 900] [--quiet 45]
+// Agents can be done while their work is still on its way to landing, so it
+// first waits until no landing is in flight and nothing has changed for
+// --quiet seconds (at most --wait seconds), and records whether it settled.
 // Needs SUPERPOSE_ADMIN_TOKEN (and SUPERPOSE_URL unless the hosted one).
 
 import { spawnSync } from 'node:child_process';
@@ -15,7 +19,15 @@ import { parseArgs } from 'node:util';
 import { Api, serviceUrl } from './lib.mjs';
 
 const { values } = parseArgs({
-  options: { graph: { type: 'string' }, line: { type: 'string', default: 'main' }, hidden: { type: 'string' }, out: { type: 'string' }, url: { type: 'string' } },
+  options: {
+    graph: { type: 'string' },
+    line: { type: 'string', default: 'main' },
+    hidden: { type: 'string' },
+    out: { type: 'string' },
+    url: { type: 'string' },
+    wait: { type: 'string', default: '900' },
+    quiet: { type: 'string', default: '45' },
+  },
 });
 const admin = process.env.SUPERPOSE_ADMIN_TOKEN;
 if (!values.graph || !admin) {
@@ -25,10 +37,36 @@ if (!values.graph || !admin) {
 const api = new Api(serviceUrl(values.url), values.graph);
 const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 300_000, ...opts });
 
+// Wait for the graph to settle: no landing in flight, and no change for a while.
+const result = { graph: values.graph, line: values.line };
+{
+  const started = Date.now();
+  let last = null;
+  let since = Date.now();
+  result.settled = false;
+  while (Date.now() - started < Number(values.wait) * 1000) {
+    const snap = await api.snapshot();
+    if (snap.ok) {
+      const lines = snap.data.lines ?? [];
+      const claims = snap.data.nodes.filter((n) => n.kind === 'claim');
+      const print = JSON.stringify([lines.map((l) => [l.name, l.head ?? null, !!l.landing]), claims.map((c) => [c.id, c.status, c.landing?.status ?? null])]);
+      if (print !== last) {
+        last = print;
+        since = Date.now();
+      } else if (!lines.some((l) => l.landing) && Date.now() - since >= Number(values.quiet) * 1000) {
+        result.settled = true;
+        break;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  result.waitedSeconds = Math.round((Date.now() - started) / 1000);
+}
+
 const access = await api.lineAccess(admin, values.line, 'read', 600);
 if (!access.ok) throw new Error(`no read access to line ${values.line}: ${JSON.stringify(access.data)}`);
 const dir = mkdtempSync(join(tmpdir(), 'sp-final-'));
-const result = { graph: values.graph, line: values.line, at: new Date().toISOString() };
+result.at = new Date().toISOString();
 try {
   const clone = run('git', ['-c', `http.extraHeader=Authorization: Bearer ${access.data.token}`, 'clone', '-q', access.data.remote, join(dir, 'repo')], {
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
