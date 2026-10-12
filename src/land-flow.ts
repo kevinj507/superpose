@@ -47,9 +47,17 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
         return r;
       });
       if (merged.status !== 'merged') return merged;
-      const outside = await step.do('check that the merge changes only what the claim may', () =>
-        outsideScope(host, ctx.line.name, merged.base, merged.merge, ctx.scope),
-      );
+      const outside = await step.do('check that the merge changes only what the claim may', async () => {
+        // A landing started before this check existed has no scope in its
+        // first step's saved result.
+        let scope = ctx.scope;
+        if (!scope) {
+          const r = await stub.landingContext(line, claim);
+          if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+          scope = r.value.scope;
+        }
+        return outsideScope(host, ctx.line.name, merged.base, merged.merge, scope);
+      });
       if (outside.length) return outsideScopeOutcome(outside);
 
       const config = await step.do('read the checks from the merged result', () => readCheckConfig(host, ctx.line.name, merged.merge));

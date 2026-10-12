@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FETCH_SCRIPT, RUN_SCRIPT } from '../src/core/checks';
+import { EXIT_FETCH_FAILED, FETCH_SCRIPT, RUN_SCRIPT } from '../src/core/checks';
 import { MERGE_SCRIPT, PROMOTE_SCRIPT } from '../src/core/landing';
 
 // Plain JavaScript (the type check targets the Workers runtime, which has no
@@ -52,6 +52,56 @@ describe('the container scripts', () => {
 
   it('the run step is never given a token', () => {
     expect(RUN_SCRIPT).not.toMatch(/TOKEN/);
+  });
+});
+
+// The merge script against real bare repos on disk (git ignores the
+// Authorization header for local paths).
+function mergeIn(dir, env) {
+  const script = join(dir, 'merge.sh');
+  writeFileSync(script, MERGE_SCRIPT.replaceAll('/work', join(dir, 'w')));
+  const r = spawnSync('sh', [script], {
+    env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_NOSYSTEM: '1', LINE_TOKEN: 'x', CLAIM_TOKEN: 'x', MESSAGE: 'Land c1', STAGING: 'refs/heads/superpose/landing-c1', ...env },
+    encoding: 'utf8',
+  });
+  return { code: r.status, out: r.stdout };
+}
+
+function bareWithCommit(dir, name, file) {
+  const work = join(dir, `${name}-work`);
+  const git = (...args) => execFileSync('git', ['-C', work, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }).trim();
+  execFileSync('git', ['init', '-q', '-b', 'main', work]);
+  writeFileSync(join(work, file), name);
+  git('add', '.');
+  git('commit', '-q', '-m', name);
+  execFileSync('git', ['clone', '-q', '--bare', work, join(dir, `${name}.git`)]);
+  return { remote: join(dir, `${name}.git`), sha: git('rev-parse', 'HEAD') };
+}
+
+describe('the merge script', () => {
+  it('lands a claim on an empty line as the line\'s first history', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sp-merge-'));
+    try {
+      execFileSync('git', ['init', '-q', '--bare', '-b', 'main', join(dir, 'line.git')]);
+      const claim = bareWithCommit(dir, 'claim', 'a.txt');
+      const r = mergeIn(dir, { LINE_REMOTE: join(dir, 'line.git'), CLAIM_REMOTE: claim.remote, SHA: claim.sha });
+      expect(r).toMatchObject({ code: 0, out: expect.stringContaining(`MERGED ${claim.sha}`) });
+      expect(r.out).not.toContain('BASE');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a line it cannot read as a failed fetch, never as an empty line', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sp-merge-'));
+    try {
+      const claim = bareWithCommit(dir, 'claim', 'a.txt');
+      const r = mergeIn(dir, { LINE_REMOTE: join(dir, 'no-such-line.git'), CLAIM_REMOTE: claim.remote, SHA: claim.sha });
+      expect(r.code).toBe(EXIT_FETCH_FAILED);
+      expect(r.out).not.toContain('MERGED');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -35,7 +35,9 @@ git init -q -b main
 git config user.name "Superpose"
 git config user.email "land@superpose.invalid"
 git config core.hooksPath /dev/null
-if git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" ls-remote --exit-code "$LINE_REMOTE" refs/heads/main > /dev/null 2>&1; then
+git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" ls-remote --exit-code "$LINE_REMOTE" refs/heads/main > /dev/null 2>&1
+found=$?
+if [ $found -eq 0 ]; then
   git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" fetch -q "$LINE_REMOTE" main || exit ${EXIT_FETCH_FAILED}
   git checkout -q -B main FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
   echo "BASE $(git rev-parse HEAD)"
@@ -45,10 +47,13 @@ if git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" ls-remote --exit-
     git diff --name-only --diff-filter=U
     exit ${EXIT_MERGE_CONFLICT}
   fi
-else
+elif [ $found -eq 2 ]; then
   # A line with no commits yet: the claim's work becomes its first history.
   git -c http.extraHeader="Authorization: Bearer $CLAIM_TOKEN" fetch -q "$CLAIM_REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
   git checkout -q -B main FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
+else
+  # The line could not be read (network, auth), which is not an empty line.
+  exit ${EXIT_FETCH_FAILED}
 fi
 git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" push -q --no-verify -f "$LINE_REMOTE" "HEAD:$STAGING" || exit ${EXIT_PUSH_REJECTED}
 echo "MERGED $(git rev-parse HEAD)"
@@ -104,7 +109,13 @@ export async function mergeForLanding(host: RepoHost, exec: Exec, job: LandingJo
         ],
         timeoutSeconds: 120,
       });
-      return mergeResult(outcome);
+      const result = mergeResult(outcome);
+      // The script found no main on the line. If the line has commits, that
+      // was a failed read, not an empty line: retried, never judged.
+      if (result.status === 'merged' && !result.base && (await host.readHead(job.line.name))) {
+        return { status: 'error', log: `the line looked empty to the merge, but it has commits\n${result.log}` };
+      }
+      return result;
     } finally {
       await host.revokeToken(job.claim.name, claimToken.id).catch(() => {});
     }

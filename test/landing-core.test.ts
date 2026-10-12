@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EXIT_FETCH_FAILED, EXIT_MERGE_CONFLICT } from '../src/core/checks';
 import { Engine } from '../src/core/engine';
 import { FakeRepoHost, MapKeyValue } from '../src/core/fake-host';
-import { landingFromCheck, landingMessage, mergeResult, MERGE_SCRIPT, outsideScope, outsideScopeOutcome, PROMOTE_SCRIPT } from '../src/core/landing';
+import { landingFromCheck, landingMessage, mergeForLanding, mergeResult, MERGE_SCRIPT, outsideScope, outsideScopeOutcome, PROMOTE_SCRIPT } from '../src/core/landing';
 import { MemoryStore } from '../src/core/store';
 
 function setup() {
@@ -153,6 +153,14 @@ describe('judging what a landing changes on its line', () => {
     const outside = await outsideScope(host, 'line', head, merge, ['src/b/**']);
     expect(outside).toEqual(['src/a/x.ts']);
     expect(outsideScopeOutcome(outside)).toMatchObject({ status: 'failed', log: expect.stringContaining('src/a/x.ts') });
+  });
+
+  it('retries a merge that saw no line when the line has commits, rather than judging it', async () => {
+    const { host } = await line();
+    const claim = await host.ensure('claim');
+    const exec = async () => ({ exitCode: 0, stdout: `MERGED ${'a'.repeat(40)}`, stderr: '', ms: 1 });
+    const job = { line: { name: 'line', remote: 'r' }, claim: { name: claim.name, remote: claim.remote }, claimId: 'c1', sha: 'b'.repeat(40), statement: 's' };
+    expect(await mergeForLanding(host, exec, job)).toMatchObject({ status: 'error', log: expect.stringContaining('looked empty') });
   });
 
   it('judges a first landing on an empty line by every file it brings', async () => {
