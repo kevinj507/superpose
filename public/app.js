@@ -84,6 +84,28 @@ function setupTheme() {
 // -------------------------------------------------------------- landing --
 
 function startLanding() {
+  // The playground: agents start on Cloudflare (or the run already going is
+  // joined), and its graph opens live.
+  const play = $('play-btn');
+  if (play) {
+    play.addEventListener('click', async () => {
+      play.disabled = true;
+      const label = play.textContent;
+      play.textContent = 'Starting agents…';
+      try {
+        const res = await fetch('/api/play', { method: 'POST' });
+        const body = await res.json();
+        if (!res.ok || !body.graph) throw new Error(body.message || `HTTP ${res.status}`);
+        location.href = `/g/${body.graph}`;
+      } catch (err) {
+        play.textContent = `Could not start: ${err.message}`;
+        setTimeout(() => {
+          play.textContent = label;
+          play.disabled = false;
+        }, 4000);
+      }
+    });
+  }
   const form = $('open-form');
   const input = $('gid-input');
   if (!form || !input) return;
