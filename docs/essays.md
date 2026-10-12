@@ -27,3 +27,5 @@ Artifacts events start Workflows. A namespace-wide cf.artifacts.repo.pushed trig
 Containers do the work a Worker cannot. Each check or landing gets a fresh container from a public Node image, owned by a Durable Object and given a short-lived token in its environment. It fetches exactly one commit, runs the tests, or merges into the line, re-runs the tests on the merged result and pushes only if they pass.
 
 A typical push travels like this: git push to the claim's repo, then the event, then a Workflow step that compares trees in the Durable Object, then a container running the tests on that SHA, then the verdict. When the claim finishes, landing follows: a container merges, re-tests and pushes to the line, and a claim waiting on it becomes ready with that code in its fork.
+
+The playground runs the whole story on Cloudflare: a Workflow starts agents in a container, and a public page shows them live.
