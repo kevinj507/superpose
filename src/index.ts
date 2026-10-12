@@ -1,6 +1,7 @@
 import type { Result } from './graph';
 
 export { Graph } from './graph';
+export { PushFlow } from './push-flow';
 
 // HTTP API in front of the per-graph Durable Objects.
 //   Planner and human routes: Authorization: Bearer <ADMIN_TOKEN>
@@ -18,6 +19,8 @@ const STATUS: Record<string, number> = {
   contradicted: 409,
   not_done: 409,
   repo_unavailable: 503,
+  unknown_commit: 404,
+  no_repo: 409,
 };
 
 type Handler = (ctx: {
@@ -78,9 +81,14 @@ route('POST', '/api/graphs/:gid/claims/:id/claim', 'agent', ({ graph, params, bo
 
 route('POST', '/api/graphs/:gid/claims/:id/renew', 'lease', ({ graph, params, bearer }) => graph.renew(params.gid!, params.id!, bearer));
 route('POST', '/api/graphs/:gid/claims/:id/release', 'lease', ({ graph, params, bearer }) => graph.release(params.gid!, params.id!, bearer));
-route('POST', '/api/graphs/:gid/claims/:id/push', 'lease', ({ graph, params, body, bearer }) =>
-  graph.push(params.id!, bearer, { sha: str(body.sha), changedPaths: strs(body.changedPaths) }),
-);
+// "I pushed this commit": the platform reads the commit from the claim's repo
+// and records the verdict. Push events reach the same check without this.
+route('POST', '/api/graphs/:gid/claims/:id/push', 'lease', async ({ graph, params, body, bearer }) => {
+  const r = await graph.notePush(params.gid!, params.id!, bearer, str(body.sha));
+  if (!r.ok) return r;
+  const { accepted, reason, verdict, paths, outside } = r.value;
+  return { ok: true, value: { accepted, ...(reason ? { reason } : {}), verdict, paths, outside } };
+});
 route('POST', '/api/graphs/:gid/claims/:id/finish', 'lease', ({ graph, params, bearer }) => graph.finish(params.gid!, params.id!, bearer));
 route('POST', '/api/graphs/:gid/claims/:id/replan', 'lease', ({ graph, params, body, bearer }) =>
   graph.replan(params.gid!, params.id!, bearer, {

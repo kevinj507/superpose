@@ -22,7 +22,8 @@ async function api<T = any>(method: string, path: string, token?: string, body?:
 // A small project: A carries three claims directly and one through a claim it
 // builds on; B carries the rest.
 async function project() {
-  const g = `/api/graphs/t${++graphSeq}`;
+  const gid = `t${++graphSeq}`;
+  const g = `/api/graphs/${gid}`;
   const A = (await api('POST', `${g}/assumptions`, ADMIN, { statement: 'the date library handles time zones' })).data;
   const B = (await api('POST', `${g}/assumptions`, ADMIN, { statement: 'requests are authenticated upstream' })).data;
   const onA = [];
@@ -37,11 +38,19 @@ async function project() {
   for (const c of [...onA, ...onB]) {
     tokens[c.id] = (await api('POST', `${g}/claims/${c.id}/claim`, AGENT, { agent: `agent-${c.id}` })).data.token;
   }
-  await api('POST', `${g}/claims/${onA[0].id}/push`, tokens[onA[0].id], { sha: 'd1-sha', changedPaths: ['src/d1/a.ts'] });
+  const d1sha = await pushTo(gid, onA[0].id, tokens[onA[0].id]!, { 'src/d1/a.ts': 'a' });
   await api('POST', `${g}/claims/${onA[0].id}/finish`, tokens[onA[0].id]);
   const builtOn = (await api('POST', `${g}/claims`, ADMIN, { statement: 'builds on d1', scope: ['src/x/**'], requires: [onA[0].id] })).data;
   tokens[builtOn.id] = (await api('POST', `${g}/claims/${builtOn.id}/claim`, AGENT, { agent: 'agent-x' })).data.token;
-  return { g, A, B, onA, onB, builtOn, tokens };
+  return { gid, g, A, B, onA, onB, builtOn, tokens, d1sha };
+}
+
+// Commit to a claim's repo in the in-memory git host, then report the push
+// the way an agent does. Returns the commit.
+async function pushTo(gid: string, claim: string, lease: string, files: Record<string, string | null>, report = true) {
+  const sha = await host(gid, (h) => h.commit(`${gid}.claim.${claim}`, files, `work\n\nSuperpose-Claim: ${claim}`).after);
+  if (report) await api('POST', `/api/graphs/${gid}/claims/${claim}/push`, lease, { sha });
+  return sha;
 }
 
 describe('the API in front of the graph', () => {
@@ -85,18 +94,22 @@ describe('the API in front of the graph', () => {
       expect((await api('POST', `${p.g}/claims/${c.id}/renew`, p.tokens[c.id])).data).toMatchObject({ ok: true, notices: [] });
     }
 
-    const blocked = await api('POST', `${p.g}/claims/${p.onA[1].id}/push`, p.tokens[p.onA[1].id], { sha: 's', changedPaths: ['src/d2/a.ts'] });
-    expect(blocked.data).toEqual({ accepted: false, reason: 'stale' });
+    const s1 = await pushTo(p.gid, p.onA[1].id, p.tokens[p.onA[1].id]!, { 'src/d2/a.ts': 'a' }, false);
+    const blocked = await api('POST', `${p.g}/claims/${p.onA[1].id}/push`, p.tokens[p.onA[1].id], { sha: s1 });
+    expect(blocked.data).toMatchObject({ accepted: false, reason: 'stale' });
 
     const C = (await api('POST', `${p.g}/assumptions`, ADMIN, { statement: 'store UTC, convert at the edge' })).data;
     expect((await api('POST', `${p.g}/claims/${p.onA[1].id}/replan`, p.tokens[p.onA[1].id], { restsOn: [p.A.id] })).status).toBe(409);
     expect((await api('POST', `${p.g}/claims/${p.onA[1].id}/replan`, p.tokens[p.onA[1].id], { restsOn: [C.id] })).status).toBe(200);
-    const after = await api('POST', `${p.g}/claims/${p.onA[1].id}/push`, p.tokens[p.onA[1].id], { sha: 's2', changedPaths: ['src/d2/a.ts', 'package.json'] });
-    expect(after.data).toEqual({ accepted: true, verdict: 'scope-violation', outside: ['package.json'] });
+    const s2 = await pushTo(p.gid, p.onA[1].id, p.tokens[p.onA[1].id]!, { 'src/d2/a.ts': 'b', 'package.json': '{}' }, false);
+    const after = await api('POST', `${p.g}/claims/${p.onA[1].id}/push`, p.tokens[p.onA[1].id], { sha: s2 });
+    expect(after.data).toEqual({
+      accepted: true, verdict: 'scope-violation', paths: ['package.json', 'src/d2/a.ts'], outside: ['package.json'],
+    });
 
     const snap = await api('GET', `${p.g}/snapshot`);
     const d1 = snap.data.nodes.find((n: any) => n.id === p.onA[0].id);
-    expect(d1).toMatchObject({ status: 'stale', kept: [{ sha: 'd1-sha' }] });
+    expect(d1).toMatchObject({ status: 'stale', kept: [{ sha: p.d1sha }] });
   });
 });
 

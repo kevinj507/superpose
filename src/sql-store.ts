@@ -1,5 +1,5 @@
 import type { Store } from './core/store';
-import type { Edge, EdgePurpose, GraphEvent, GraphNode } from './core/types';
+import type { Edge, EdgePurpose, GraphEvent, GraphNode, PushRecord } from './core/types';
 
 // The engine's Store on a Durable Object's SQLite database. SQLite calls in a
 // Durable Object are synchronous, so the engine runs unchanged.
@@ -14,6 +14,9 @@ export class SqlStore implements Store {
       seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, type TEXT NOT NULL,
       claims TEXT NOT NULL, data TEXT NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS counters (prefix TEXT PRIMARY KEY, n INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
+      claim TEXT NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL, json TEXT NOT NULL,
+      PRIMARY KEY (claim, sha))`);
   }
 
   getNode(id: string): GraphNode | undefined {
@@ -114,6 +117,31 @@ export class SqlStore implements Store {
       )
       .one();
     return `${prefix}${row.n}`;
+  }
+
+  getPush(claim: string, sha: string): PushRecord | undefined {
+    const row = this.sql
+      .exec<{ json: string }>(`SELECT json FROM ledger WHERE claim = ? AND sha = ?`, claim, sha)
+      .toArray()[0];
+    return row ? (JSON.parse(row.json) as PushRecord) : undefined;
+  }
+
+  putPush(row: PushRecord): void {
+    this.sql.exec(
+      `INSERT INTO ledger (claim, sha, at, json) VALUES (?, ?, ?, ?)
+       ON CONFLICT (claim, sha) DO UPDATE SET json = excluded.json`,
+      row.claim,
+      row.sha,
+      row.at,
+      JSON.stringify(row),
+    );
+  }
+
+  pushes(claim?: string): PushRecord[] {
+    const rows = claim
+      ? this.sql.exec<{ json: string }>(`SELECT json FROM ledger WHERE claim = ? ORDER BY at, rowid`, claim)
+      : this.sql.exec<{ json: string }>(`SELECT json FROM ledger ORDER BY at, rowid`);
+    return rows.toArray().map((r) => JSON.parse(r.json) as PushRecord);
   }
 
   private edgeRows(query: string, ...bindings: string[]): Edge[] {

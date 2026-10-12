@@ -12,6 +12,8 @@ export interface RepoHost {
   revokeToken(repo: string, tokenId: string): Promise<void>;
   readCommit(repo: string, sha: string): Promise<HostCommit | null>;
   readTree(repo: string, tree: string): Promise<HostTreeEntry[] | null>;
+  // Tip of the default branch, or null for an empty repo.
+  readHead(repo: string): Promise<string | null>;
 }
 
 export interface HostRepo extends RepoRef {
@@ -65,6 +67,19 @@ export function parseRepoName(name: string): { graph: string; kind: 'line' | 'cl
 
 const NO_COMMIT = /^0{40}$/;
 
+// The claims a commit names in its trailer, e.g. "Superpose-Claim: c12".
+export function trailerClaims(message: string): string[] {
+  const out: string[] = [];
+  for (const m of message.matchAll(/^Superpose-Claim:[ \t]*(.+)$/gim)) {
+    out.push(...m[1]!.split(/[\s,]+/).filter(Boolean));
+  }
+  return out;
+}
+
+export class UnknownCommitError extends Error {
+  code = 'unknown_commit';
+}
+
 // The paths that differ between two commits. A push event carries no file
 // list, so the scope check compares trees, descending only into directories
 // whose hashes differ. A missing `before` (a new branch) compares against an
@@ -73,7 +88,7 @@ export async function changedPaths(host: RepoHost, repo: string, before: string 
   const treeOf = async (sha: string | null) => {
     if (!sha || NO_COMMIT.test(sha)) return null;
     const commit = await host.readCommit(repo, sha);
-    if (!commit) throw new Error(`commit ${sha} not found in ${repo}`);
+    if (!commit) throw new UnknownCommitError(`commit ${sha} not found in ${repo}`);
     return commit.tree;
   };
   const [a, b] = await Promise.all([treeOf(before), treeOf(after)]);

@@ -1,6 +1,21 @@
 import { EngineError, type Engine, type RenewResult } from './engine';
-import { claimRepoName, lineRepoName, type GitAccess, type RepoHost } from './repos';
-import type { Claim, ClaimStatus, RepoRef } from './types';
+import {
+  changedPaths,
+  claimRepoName,
+  lineRepoName,
+  trailerClaims,
+  UnknownCommitError,
+  type GitAccess,
+  type RepoHost,
+} from './repos';
+import type { CheckRun, Claim, ClaimStatus, PushRecord, RepoRef } from './types';
+
+export interface PushReport {
+  sha: string;
+  ref: string;
+  before: string | null;
+  commits?: { id: string; message: string }[];
+}
 
 // Runs one synchronous step of the engine as a transaction: everything in it
 // is written, or nothing is (an EngineError rolls it back).
@@ -104,6 +119,41 @@ export class Coordinator {
     } catch {
       return { claim };
     }
+  }
+
+  // Check a push against the claim's declared scope. The platform reads the
+  // commit from the repo itself: what changed is never taken from the agent.
+  async inspectPush(id: string, push: PushReport): Promise<PushRecord> {
+    const c = this.tx((e) => e.getClaim(id));
+    if (!c.repo) throw new EngineError('no_repo', `claim ${id} has no repo yet`);
+    const known = this.tx((e) => e.pushRecord(id, push.sha));
+    if (known) return known;
+    let paths: string[];
+    let head: string | null;
+    try {
+      [paths, head] = await Promise.all([
+        changedPaths(this.host, c.repo.name, c.baseSha ?? null, push.sha),
+        this.host.readHead(c.repo.name),
+      ]);
+    } catch (err) {
+      if (err instanceof UnknownCommitError) throw new EngineError('unknown_commit', err.message);
+      throw err;
+    }
+    const unattributed = (push.commits ?? []).filter((m) => !trailerClaims(m.message).includes(id)).map((m) => m.id);
+    return this.tx((e) =>
+      e.recordPush(id, { sha: push.sha, ref: push.ref, before: push.before, paths, isHead: head === push.sha, unattributed }),
+    );
+  }
+
+  // The agent's own "I pushed": checked exactly like a push event, so it only
+  // makes the verdict arrive sooner.
+  async notePush(id: string, token: string, sha: string): Promise<PushRecord> {
+    this.tx((e) => e.checkLease(id, token));
+    return this.inspectPush(id, { sha, ref: 'refs/heads/main', before: null });
+  }
+
+  recordCheck(id: string, sha: string, check: CheckRun): PushRecord {
+    return this.tx((e) => e.recordCheck(id, sha, check));
   }
 
   // ---- internals -----------------------------------------------------------

@@ -9,6 +9,18 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Graph"] }],
   // Every claim gets its own repo here: a fork of its line, named <graph>.claim.<id>.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "superpose" }],
+  // Every push to any repo in the namespace starts a PushFlow, which reads the
+  // commit and records the verdict on the claim (the event has no file list).
+  "workflows": [{ "binding": "PUSHES", "name": "superpose-pushes", "class_name": "PushFlow" }],
+  "triggers": {
+    "events": [
+      {
+        "type": "cf.artifacts.repo.pushed",
+        "filter": { "namespace": "superpose" },
+        "targets": [{ "type": "workflow", "workflow_name": "superpose-pushes" }]
+      }
+    ]
+  },
   "observability": { "enabled": true }
   // Secrets, set with `wrangler secret put`: ADMIN_TOKEN, AGENT_KEY.
   // Optional vars: LEASE_MS, HEDGE_MS; REPO_HOST=fake for an in-memory git host.

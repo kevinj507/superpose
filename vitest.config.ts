@@ -17,7 +17,7 @@ export default defineConfig({
               bindings: {
                 ADMIN_TOKEN: 'test-admin',
                 AGENT_KEY: 'test-agent',
-                LEASE_MS: '60000',
+                LEASE_MS: '120000',
                 HEDGE_MS: '300000',
                 REPO_HOST: 'fake',
               },

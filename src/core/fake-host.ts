@@ -105,6 +105,12 @@ export class FakeRepoHost implements RepoHost {
     return this.kv.get<HostTreeEntry[]>(`tree:${tree}`) ?? null;
   }
 
+  async readHead(repo: string): Promise<string | null> {
+    const r = this.repo(repo);
+    if (!r) throw hostError('NOT_FOUND', `no repo ${repo}`);
+    return r.head ?? null;
+  }
+
   // ---- what a git client would do ------------------------------------------
 
   // Would a push with this token be accepted?
@@ -116,7 +122,7 @@ export class FakeRepoHost implements RepoHost {
 
   // Commit file changes on top of the repo's head (null deletes a file) and
   // move the head. Returns { before, after } as a push event would carry them.
-  commit(repo: string, changes: Record<string, string | null>, message = 'change'): { before: string | null; after: string } {
+  commit(repo: string, changes: Record<string, string | null>, message = 'change'): { before: string | null; after: string; message: string } {
     const r = this.repo(repo);
     if (!r) throw hostError('NOT_FOUND', `no repo ${repo}`);
     const files = r.head ? this.files(r.head) : new Map<string, string>();
@@ -129,7 +135,7 @@ export class FakeRepoHost implements RepoHost {
     const sha = hash(`commit ${tree} ${parents.join(' ')} ${message} ${this.clock.now()}`);
     this.kv.put(`commit:${sha}`, { sha, tree, parents, message } satisfies HostCommit);
     this.kv.put(`repo:${repo}`, { ...r, head: sha });
-    return { before: r.head ?? null, after: sha };
+    return { before: r.head ?? null, after: sha, message };
   }
 
   head(repo: string): string | undefined {

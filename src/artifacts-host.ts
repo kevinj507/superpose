@@ -49,6 +49,10 @@ export class ArtifactsHost implements RepoHost {
     return entries.map((e) => ({ name: e.name, type: e.type === 'tree' ? 'tree' : 'blob', hash: e.hash }));
   }
 
+  async readHead(repo: string): Promise<string | null> {
+    return (await this.head(repo)) ?? null;
+  }
+
   // ---- internals -------------------------------------------------------------
 
   // create() and fork() each hand back a write token valid for 24 hours. Write

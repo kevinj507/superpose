@@ -1,7 +1,8 @@
-import { outOfScope } from './scope';
+import { inScope, outOfScope } from './scope';
 import type { Store } from './store';
 import type {
   Assumption,
+  CheckRun,
   Claim,
   ClaimStatus,
   EventType,
@@ -9,8 +10,12 @@ import type {
   GraphNode,
   KeptBranch,
   Notice,
+  PushRecord,
   RepoRef,
+  Verdict,
 } from './types';
+
+const MAIN = 'refs/heads/main';
 
 export interface Clock {
   now(): number;
@@ -191,16 +196,81 @@ export class Engine {
     return { ok: true, expiresAt, notices };
   }
 
+  // A push by the lease holder, with the paths the platform computed for it.
   push(id: string, token: string, push: { sha: string; changedPaths: string[] }): PushResult {
-    const c = this.held(id, token);
-    if (c.status === 'stale') return { accepted: false, reason: 'stale' };
-    const outside = outOfScope(push.changedPaths, c.scope);
-    this.store.putNode({ ...c, headSha: push.sha, pushes: c.pushes + 1 });
-    return {
-      accepted: true,
-      verdict: outside.length ? 'scope-violation' : 'in-scope',
+    this.held(id, token);
+    const row = this.recordPush(id, { sha: push.sha, ref: MAIN, before: null, paths: push.changedPaths, isHead: true });
+    return pushResult(row);
+  }
+
+  // The platform's record of one commit pushed to a claim's repo: the files it
+  // changes relative to the claim's base, whether they stay inside the
+  // declared scope, and whether the commit became the claim's head. A stale
+  // claim's push is recorded but not accepted. The same commit recorded twice
+  // (the push event and the agent's own report) changes nothing.
+  recordPush(
+    id: string,
+    input: { sha: string; ref: string; before: string | null; paths: string[]; isHead: boolean; unattributed?: string[] },
+  ): PushRecord {
+    const c = this.claimNode(id);
+    const existing = this.store.getPush(id, input.sha);
+    if (existing) return existing;
+    const outside = outOfScope(input.paths, c.scope);
+    let reason: PushRecord['reason'];
+    if (input.ref !== MAIN) reason = 'other-branch';
+    else if (c.status === 'stale') reason = 'stale';
+    else if (c.status !== 'claimed') reason = 'not-claimed';
+    else if (!input.isHead) reason = 'not-head';
+    const row: PushRecord = {
+      claim: id,
+      sha: input.sha,
+      ref: input.ref,
+      before: input.before,
+      at: this.clock.now(),
+      paths: [...input.paths],
       outside,
+      accepted: !reason,
+      verdict: outside.length ? 'scope-violation' : 'unverified',
     };
+    if (reason) row.reason = reason;
+    if (input.unattributed?.length) row.unattributed = [...input.unattributed];
+    this.store.putPush(row);
+    if (row.accepted) this.store.putNode({ ...c, headSha: input.sha, pushes: c.pushes + 1 });
+    this.notifyTouched(c, outside, input.sha);
+    return row;
+  }
+
+  // The result of running the claim's checks on one exact commit. A scope
+  // violation stays the verdict whatever the tests say.
+  recordCheck(id: string, sha: string, check: CheckRun): PushRecord {
+    const row = this.store.getPush(id, sha);
+    if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
+    let verdict: Verdict = row.verdict;
+    if (row.verdict !== 'scope-violation') {
+      if (check.status === 'passed') verdict = 'checks-passed';
+      else if (check.status === 'failed') verdict = 'checks-failed';
+      else if (check.status === 'error') verdict = 'verifier-failed';
+      else verdict = 'unverified';
+    }
+    const next: PushRecord = { ...row, checks: check, verdict };
+    this.store.putPush(next);
+    if (check.status !== 'running') this.emit('claim.checked', [id], { sha, verdict, exitCode: check.exitCode });
+    return next;
+  }
+
+  pushRecord(id: string, sha: string): PushRecord | undefined {
+    return this.store.getPush(id, sha);
+  }
+
+  // The verdict on the claim's current head, if it has one.
+  verdictOf(id: string): PushRecord | undefined {
+    const c = this.claimNode(id);
+    return c.headSha ? this.store.getPush(id, c.headSha) : undefined;
+  }
+
+  // Lease check alone, for calls that do their own work before writing.
+  checkLease(id: string, token: string): Claim {
+    return this.held(id, token);
   }
 
   // Finish a claim. Returns the git token to revoke: the work is handed in.
@@ -393,6 +463,17 @@ export class Engine {
 
   // ---- internals ---------------------------------------------------------------
 
+  // A push that strays outside its scope tells every live claim whose scope it
+  // landed in (notify-and-repair), at that claim's next renewal.
+  private notifyTouched(c: Claim, outside: string[], sha: string) {
+    if (!outside.length) return;
+    for (const other of this.claims()) {
+      if (other.id === c.id || !(other.status === 'claimed' || other.status === 'stale')) continue;
+      const hit = outside.filter((p) => inScope(p, other.scope));
+      if (hit.length) this.emit('scope.touched', [other.id], { by: c.id, sha, paths: hit });
+    }
+  }
+
   // Every claim that rests on the given assumptions, directly or through a
   // chain of claims built on such claims.
   private downstreamOf(assumptionIds: string[]): Claim[] {
@@ -451,4 +532,13 @@ export class Engine {
 function fingerprintOf(statement: string, effect: string, targets: string[]): string {
   const norm = statement.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   return `${effect}|${[...targets].sort().join(',')}|${norm}`;
+}
+
+function pushResult(row: PushRecord): PushResult {
+  if (!row.accepted && row.reason === 'stale') return { accepted: false, reason: 'stale' };
+  return {
+    accepted: row.accepted,
+    verdict: row.outside.length ? 'scope-violation' : 'in-scope',
+    outside: row.outside,
+  };
 }

@@ -1,9 +1,10 @@
 import { DurableObject } from 'cloudflare:workers';
 import { ArtifactsHost } from './artifacts-host';
-import { Coordinator, type Tx } from './core/coordinator';
+import { Coordinator, type PushReport, type Tx } from './core/coordinator';
 import { Engine, EngineError, type NewClaim } from './core/engine';
 import { FakeRepoHost } from './core/fake-host';
 import type { RepoHost } from './core/repos';
+import type { CheckRun } from './core/types';
 import { SqlStore } from './sql-store';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
@@ -89,8 +90,18 @@ export class Graph extends DurableObject<Env> {
     return this.runWithRepos(graph, (c) => c.lineAccess(line, scope, ttlSeconds));
   }
 
-  push(id: string, token: string, push: { sha: string; changedPaths: string[] }) {
-    return this.run((e) => e.push(id, token, push));
+  // The agent's own report of a push; the platform reads the commit itself.
+  notePush(graph: string, id: string, token: string, sha: string) {
+    return this.runWithRepos(graph, (c) => c.notePush(id, token, sha));
+  }
+
+  // A push event from the trigger.
+  recordPush(graph: string, id: string, push: PushReport) {
+    return this.runWithRepos(graph, (c) => c.inspectPush(id, push));
+  }
+
+  recordCheck(id: string, sha: string, check: CheckRun) {
+    return this.run((e) => e.recordCheck(id, sha, check));
   }
 
   finish(graph: string, id: string, token: string) {
@@ -135,6 +146,7 @@ export class Graph extends DurableObject<Env> {
       nodes: e.nodesForDisplay(),
       edges: this.store.allEdges(),
       events: e.events(),
+      pushes: this.store.pushes(),
     }));
   }
 }
@@ -143,5 +155,5 @@ function missingHost(): RepoHost {
   const fail = async (): Promise<never> => {
     throw new EngineError('repo_unavailable', 'no git host: bind ARTIFACTS, or set REPO_HOST=fake for local use');
   };
-  return { ensure: fail, fork: fail, mintToken: fail, revokeToken: fail, readCommit: fail, readTree: fail };
+  return { ensure: fail, fork: fail, mintToken: fail, revokeToken: fail, readCommit: fail, readTree: fail, readHead: fail };
 }
