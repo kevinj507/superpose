@@ -100,8 +100,15 @@ export class Coordinator {
     }
   }
 
+  // What an agent hands in is whatever is in its repo: the head is read and
+  // recorded before the claim closes, so a push whose event arrives after
+  // the agent finished still counts.
   async finish(id: string, token: string): Promise<void> {
-    const c = this.tx((e) => e.getClaim(id));
+    const c = this.tx((e) => e.checkLease(id, token));
+    if (c.repo && c.status === 'claimed') {
+      const head = await this.host.readHead(c.repo.name);
+      if (head && head !== c.baseSha) await this.inspectPush(id, { sha: head, ref: 'refs/heads/main', before: null });
+    }
     const { revoke } = this.tx((e) => e.finish(id, token));
     if (revoke && c.repo) await this.revokeQuietly(c.repo.name, revoke);
   }

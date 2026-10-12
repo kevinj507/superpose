@@ -196,3 +196,16 @@ describe('repo names route a push back to its graph', () => {
     expect(parseRepoName('spike-repo')).toBeNull();
   });
 });
+
+describe('finishing hands in what is in the repo', () => {
+  it('records the repo\'s head even if its push event has not arrived yet', async () => {
+    const w = await seeded();
+    const grant = await w.coord.claim(w.claim.id, 'agent-1');
+    const { after } = w.host.commit(grant.repo.name, { 'src/rate/limit.ts': 'done' }, `x\n\nSuperpose-Claim: ${w.claim.id}`);
+    await w.coord.finish(w.claim.id, grant.token);
+    expect(w.engine.getClaim(w.claim.id)).toMatchObject({ status: 'done', headSha: after });
+    expect(w.engine.pushRecord(w.claim.id, after)).toMatchObject({ accepted: true, paths: ['src/rate/limit.ts'] });
+    // The late event changes nothing.
+    expect(await w.coord.inspectPush(w.claim.id, { sha: after, ref: 'refs/heads/main', before: null })).toMatchObject({ accepted: true });
+  });
+});
