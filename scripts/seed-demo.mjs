@@ -7,6 +7,7 @@
 //   node scripts/seed-demo.mjs hedge           file an unverified finding (it stays a hedge)
 //   node scripts/seed-demo.mjs live            keep the agents renewing (Ctrl-C to stop)
 //   node scripts/seed-demo.mjs scene           file the time-zone finding, wait, verify it
+//                                              (6 claims go stale, 1 landed claim is at risk)
 //   node scripts/seed-demo.mjs replan          re-plan the stale claims onto a new assumption
 //   node scripts/seed-demo.mjs all             seed + hedge, then live with the scene and re-plan on a timer
 //
@@ -73,16 +74,17 @@ const ASSUMPTIONS = {
   a11y: "The design system's components are accessible as shipped",
 };
 
-// state: open (left for later), claimed, done, landed. `after` lists claims
-// (by key) this one builds on.
+// state: open (left for later), claimed, or landed (claimed, finished, and
+// merged into the line). `after` lists claims (by key) this one builds on; a
+// claim can be taken only once those have landed.
 const CLAIMS = [
   // tz: the assumption the headline finding contradicts
-  { key: 'tzImport', statement: 'Parse ISO-8601 dates in the invoice importer', scope: ['src/import/dates.ts', 'src/import/dates.test.ts'], rests: ['tz'], state: 'done', cluster: 'billing' },
+  { key: 'tzImport', statement: 'Parse ISO-8601 dates in the invoice importer', scope: ['src/import/dates.ts', 'src/import/dates.test.ts'], rests: ['tz'], state: 'landed', cluster: 'billing' },
   { key: 'tzDue', statement: "Show due dates in each customer's own time zone", scope: ['web/src/invoices/DueDate.tsx'], rests: ['tz'], state: 'claimed', cluster: 'web' },
   { key: 'tzDunning', statement: 'Send dunning reminders at 9am local time', scope: ['src/dunning/**'], rests: ['tz'], state: 'claimed', cluster: 'billing' },
-  { key: 'tzMonthly', statement: 'Bucket revenue by calendar month for reports', scope: ['src/reports/monthly.ts'], rests: ['tz', 'cents'], state: 'done', cluster: 'reporting' },
+  { key: 'tzMonthly', statement: 'Bucket revenue by calendar month for reports', scope: ['src/reports/monthly.ts'], rests: ['tz', 'cents'], state: 'claimed', cluster: 'reporting' },
   { key: 'tzCsv', statement: 'Import invoices from accounting CSV exports', scope: ['src/import/csv/**'], rests: ['ids'], after: ['tzImport'], state: 'claimed', cluster: 'billing' },
-  { key: 'tzChart', statement: 'Monthly revenue chart on the dashboard', scope: ['web/src/dashboard/Revenue*.tsx'], after: ['tzMonthly'], state: 'claimed', cluster: 'web' },
+  { key: 'tzChart', statement: 'Monthly revenue chart on the dashboard', scope: ['web/src/dashboard/Revenue*.tsx'], after: ['tzMonthly'], state: 'open', cluster: 'web' },
   { key: 'tzLate', statement: 'Accrue late fees daily after the due date', scope: ['src/fees/late.ts'], rests: ['cents'], after: ['tzDunning'], state: 'open', cluster: 'billing' },
   // auth
   { key: 'authHeader', statement: "Read the user id from the gateway's signed header", scope: ['src/auth/header.ts'], rests: ['auth'], state: 'claimed', cluster: 'platform' },
@@ -96,7 +98,7 @@ const CLAIMS = [
   { key: 'idsDetail', statement: 'Customer detail page with invoice history', scope: ['web/src/customers/Detail.tsx'], rests: ['ids'], state: 'claimed', cluster: 'web' },
   { key: 'idsExport', statement: 'Export customers to CSV', scope: ['src/export/customers.ts'], rests: ['ids'], state: 'claimed', cluster: 'reporting' },
   // pay: the assumption the hedge finding doubts
-  { key: 'payCharge', statement: 'Charge saved cards on the due date', scope: ['src/payments/charge.ts'], rests: ['pay'], state: 'done', cluster: 'payments' },
+  { key: 'payCharge', statement: 'Charge saved cards on the due date', scope: ['src/payments/charge.ts'], rests: ['pay'], state: 'landed', cluster: 'payments' },
   { key: 'payRefund', statement: 'Refunds through the payment provider', scope: ['src/payments/refunds.ts'], rests: ['pay'], state: 'claimed', cluster: 'payments' },
   { key: 'payHooks', statement: "Handle the provider's payment webhooks", scope: ['src/payments/webhooks/**'], rests: ['pay'], state: 'claimed', cluster: 'payments' },
   { key: 'payRetry', statement: 'Retry failed charges with backoff', scope: ['src/payments/retry.ts'], after: ['payCharge'], state: 'claimed', cluster: 'payments' },
@@ -122,7 +124,7 @@ const CLAIMS = [
   { key: 'uiLabels', statement: 'Screen-reader labels on the dashboard', scope: ['web/src/dashboard/a11y.ts'], rests: ['a11y'], state: 'claimed', cluster: 'web' },
   { key: 'uiMobile', statement: 'Mobile layout for invoices', scope: ['web/src/invoices/mobile.css'], rests: ['a11y'], state: 'open', cluster: 'web' },
   // nothing declared yet
-  { key: 'ci', statement: 'Continuous integration for the monorepo', scope: ['.github/workflows/**'], state: 'done', cluster: 'platform' },
+  { key: 'ci', statement: 'Continuous integration for the monorepo', scope: ['.github/workflows/**'], state: 'landed', cluster: 'platform' },
   { key: 'docs', statement: 'Write the onboarding guide for new agents', scope: ['docs/onboarding.md'], state: 'open', cluster: 'platform' },
 ];
 
@@ -153,6 +155,8 @@ async function api(method, path, token, body) {
         method,
         headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
+        // A request the server never answers must not stall every agent.
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (err) {
       if (attempt < 4) {
@@ -237,11 +241,13 @@ async function seed() {
     state.leases[id] = { token: g.token, agent: name, expiresAt: g.expiresAt, total: g.expiresAt - Date.now() };
     return id;
   };
-  for (const c of CLAIMS.filter((c) => c.state === 'landed' || c.state === 'done')) {
+  for (const c of CLAIMS.filter((c) => c.state === 'landed')) {
     const id = await take(c);
     await must('POST', `/claims/${id}/finish`, state.leases[id].token);
     delete state.leases[id];
-    if (c.state === 'landed') await must('POST', `/claims/${id}/land`, ADMIN);
+    // A finished claim with no commits lands by itself; mark it if not.
+    const node = (await must('GET', '/snapshot')).nodes.find((n) => n.id === id);
+    if (node?.status === 'done') await api('POST', `/claims/${id}/land`, ADMIN);
   }
   for (const c of CLAIMS.filter((c) => c.state === 'claimed')) await take(c);
   saveState(state);
@@ -345,8 +351,9 @@ async function replan(state, ids) {
     const rests = snap.edges
       .filter((e) => e.target === id && e.purpose === 'required for' && snap.nodes.find((n) => n.id === e.source)?.kind === 'assumption')
       .map((e) => e.source);
+    // The new assumption goes first: it is what the new plan is about.
     const restsOn = rests.filter((a) => status.get(a) === 'holding');
-    if (rests.some((a) => status.get(a) === 'contradicted')) restsOn.push(state.replanAssumption);
+    if (rests.some((a) => status.get(a) === 'contradicted')) restsOn.unshift(state.replanAssumption);
     const r = await api('POST', `/claims/${id}/replan`, lease.token, { restsOn });
     if (r.status === 200) {
       delete lease.told;
