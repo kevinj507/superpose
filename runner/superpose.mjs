@@ -160,6 +160,9 @@ async function status({ dir, claim, api }, values) {
     );
   }
   if (ctx) {
+    // The brief lists the other work in this reality, which changes as others work.
+    atomicWrite(`${dir}/CLAIM.md`, renderClaimMd(claim, index, dir));
+    out.push('CLAIM.md is refreshed: it lists the other work in this reality and what each piece rests on.');
     out.push('Rests on:');
     if (ctx.restsOn.length) for (const a of ctx.restsOn) out.push(`  ${a.id}  ${a.status.padEnd(12)} ${a.statement}`);
     else out.push('  (no assumptions declared)');

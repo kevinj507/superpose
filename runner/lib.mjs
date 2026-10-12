@@ -598,28 +598,47 @@ export function renderClaimMd(claim, index, dir) {
     }
     lines.push('', 'Use that work as it is; if it is missing or wrong, file a finding rather than changing its files.', '');
   }
+  // The rest of the work in this claim's reality: its line's other claims,
+  // and the landed work the line carries from the line it was forked from.
+  const myLine = node?.line ?? 'main';
+  const carried = new Set((index?.snap?.lines ?? []).find((l) => l.name === myLine)?.inherits ?? []);
   const others = index
-    ? [...index.nodes.values()].filter((n) => n.kind === 'claim' && n.id !== id && ['claimed', 'stale', 'open'].includes(n.status))
+    ? [...index.nodes.values()].filter(
+        (n) => n.kind === 'claim' && n.id !== id && n.status !== 'superseded' && ((n.line ?? 'main') === myLine || carried.has(n.id)),
+      )
     : [];
   if (others.length) {
-    lines.push('## Other claims in this project (not yours: leave their files alone)', '');
-    for (const c of others.slice(0, 12)) {
-      const who = c.lease?.holder && c.status !== 'open' ? `, held by ${c.lease.holder}` : '';
+    lines.push('## Other work in this reality (not yours: leave their files alone)', '');
+    for (const c of others.slice(0, 20)) {
+      const who = c.lease?.holder && (c.status === 'claimed' || c.status === 'stale') ? `, held by ${c.lease.holder}` : '';
       lines.push(`- \`${c.id}\` (${c.status}${who}): ${c.statement} Scope: ${c.scope.map((p) => `\`${p}\``).join(', ')}`);
+      for (const a of claimContext(index, c.id).restsOn) lines.push(`  - rests on \`${a.id}\` (${a.status}): ${a.statement}`);
     }
-    if (others.length > 12) lines.push(`- ... and ${others.length - 12} more`);
-    lines.push('');
+    if (others.length > 20) lines.push(`- ... and ${others.length - 20} more`);
+    lines.push(
+      '',
+      'Work that is correct on its own can still break other work in the same product. Check both ways, now and',
+      'whenever this list changes (`' + CMD + ' status` refreshes this file):',
+      '- Could your work make false something listed here: an assumption another claim rests on, or what its statement promises?',
+      '- Could another claim\'s work make false something your work relies on?',
+      '',
+      'If so, do not quietly work around it. If it is a declared assumption, file a finding against it with the',
+      `evidence: \`${CMD} finding --contradicts <assumption id> "<what is false, and why>"\`. If it is not declared, tell`,
+      `that claim directly: \`${CMD} finding --helps <claim id> "<what changes, and why it matters to that claim>"\`.`,
+      '',
+    );
   }
   lines.push(
     '## How to work',
     '',
-    '1. Make the statement true, with tests. Run the tests before you finish (`npm test` if there is a package.json).',
-    `2. Commit early and often. Every commit message ends with the trailer line \`Superpose-Claim: ${id}\` (a commit hook adds it if you forget).`,
-    '3. Push to `origin main` often: `git push origin main`. Before each push, read `.superpose/NOTICES.md`; the pre-push hook also prints anything new.',
+    `1. Before you write code, declare what your approach relies on that other work could change: run \`${CMD} assume "<statement>"\` once for each. Other agents see these and can tell you when their work breaks one.`,
+    '2. Make the statement true, with tests. Run the tests before you finish (`npm test` if there is a package.json).',
+    `3. Commit early and often. Every commit message ends with the trailer line \`Superpose-Claim: ${id}\` (a commit hook adds it if you forget).`,
+    '4. Push to `origin main` often: `git push origin main`. Before each push, read `.superpose/NOTICES.md`; the pre-push hook also prints anything new.',
     '   The platform checks every pushed commit against the scope and runs the project\'s tests on it in a fresh container; the result comes back as a CHECKED notice.',
-    '4. A refused push says why: the claim went stale, a file outside the scope changed, or (rarely) the access token was being renewed; then wait five seconds and push again.',
-    `5. When the statement is true, the tests pass, and everything is committed and pushed, run \`${CMD} done\`. Then stop.`,
-    `6. If you cannot finish, run \`${CMD} release "<why>"\` to hand the claim back. Then stop.`,
+    '5. A refused push says why: the claim went stale, a file outside the scope changed, or (rarely) the access token was being renewed; then wait five seconds and push again.',
+    `6. When the statement is true, the tests pass, and everything is committed and pushed, run \`${CMD} done\`. Then stop.`,
+    `7. If you cannot finish, run \`${CMD} release "<why>"\` to hand the claim back. Then stop.`,
     '',
     '## Commands',
     '',
