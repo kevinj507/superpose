@@ -28,6 +28,15 @@ export interface Lease {
   expiresAt: number;
   // Highest event sequence this claim's agent has been told about.
   cursor: number;
+  // The git write token that lives exactly as long as this lease. Only its id
+  // is kept, so it can be revoked; the secret goes to the agent and nowhere else.
+  git?: { tokenId: string; expiresAt: number };
+}
+
+// A repository on the git host (Artifacts in production).
+export interface RepoRef {
+  name: string;
+  remote: string;
 }
 
 export interface KeptBranch {
@@ -42,6 +51,8 @@ export interface Claim {
   cluster: string;
   statement: string;
   scope: string[]; // path patterns the claim promises to stay inside
+  line: string; // the line (one reality's code) this claim builds on and lands into
+  repo?: RepoRef; // the claim's own fork of its line, made when first claimed
   baseSha?: string;
   headSha?: string;
   status: ClaimStatus;

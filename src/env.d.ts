@@ -1,6 +1,8 @@
 declare namespace Cloudflare {
   interface Env {
     GRAPH: DurableObjectNamespace<import('./graph').Graph>;
+    ARTIFACTS?: Artifacts;
+    REPO_HOST?: string; // 'fake' for tests and local development
     ADMIN_TOKEN: string;
     AGENT_KEY: string;
     LEASE_MS?: string;

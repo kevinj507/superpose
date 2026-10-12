@@ -7,7 +7,9 @@
     "bindings": [{ "name": "GRAPH", "class_name": "Graph" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Graph"] }],
+  // Every claim gets its own repo here: a fork of its line, named <graph>.claim.<id>.
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "superpose" }],
   "observability": { "enabled": true }
   // Secrets, set with `wrangler secret put`: ADMIN_TOKEN, AGENT_KEY.
-  // Optional vars: LEASE_MS, HEDGE_MS.
+  // Optional vars: LEASE_MS, HEDGE_MS; REPO_HOST=fake for an in-memory git host.
 }

@@ -11,8 +11,16 @@ export default defineConfig({
         plugins: [
           cloudflareTest({
             wrangler: { configPath: './wrangler.jsonc' },
+            // Tests use the in-memory git host (REPO_HOST=fake), never real Artifacts.
+            remoteBindings: false,
             miniflare: {
-              bindings: { ADMIN_TOKEN: 'test-admin', AGENT_KEY: 'test-agent', LEASE_MS: '60000', HEDGE_MS: '300000' },
+              bindings: {
+                ADMIN_TOKEN: 'test-admin',
+                AGENT_KEY: 'test-agent',
+                LEASE_MS: '60000',
+                HEDGE_MS: '300000',
+                REPO_HOST: 'fake',
+              },
             },
           }),
         ],

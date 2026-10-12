@@ -17,6 +17,7 @@ const STATUS: Record<string, number> = {
   settled: 409,
   contradicted: 409,
   not_done: 409,
+  repo_unavailable: 503,
 };
 
 type Handler = (ctx: {
@@ -57,6 +58,7 @@ route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
     statement: str(body.statement),
     scope: strs(body.scope),
     cluster: str(body.cluster) || undefined,
+    line: str(body.line) || undefined,
     restsOn: strs(body.restsOn),
     requires: strs(body.requires),
     baseSha: str(body.baseSha) || undefined,
@@ -66,17 +68,22 @@ route('POST', '/api/graphs/:gid/claims/:id/land', 'admin', ({ graph, params }) =
 route('POST', '/api/graphs/:gid/findings/:fid/verify', 'admin', ({ graph, params }) => graph.verifyFinding(params.fid!));
 route('POST', '/api/graphs/:gid/findings/:fid/refute', 'admin', ({ graph, params }) => graph.refuteFinding(params.fid!));
 
-route('POST', '/api/graphs/:gid/claims/:id/claim', 'agent', ({ graph, params, body }) =>
-  graph.claim(params.id!, str(body.agent) || 'anonymous'),
+route('POST', '/api/graphs/:gid/lines/:line/access', 'admin', ({ graph, params, body }) =>
+  graph.lineAccess(params.gid!, params.line!, body.scope === 'write' ? 'write' : 'read', Number(body.ttl) || 3600),
 );
 
-route('POST', '/api/graphs/:gid/claims/:id/renew', 'lease', ({ graph, params, bearer }) => graph.renew(params.id!, bearer));
+route('POST', '/api/graphs/:gid/claims/:id/claim', 'agent', ({ graph, params, body }) =>
+  graph.claim(params.gid!, params.id!, str(body.agent) || 'anonymous'),
+);
+
+route('POST', '/api/graphs/:gid/claims/:id/renew', 'lease', ({ graph, params, bearer }) => graph.renew(params.gid!, params.id!, bearer));
+route('POST', '/api/graphs/:gid/claims/:id/release', 'lease', ({ graph, params, bearer }) => graph.release(params.gid!, params.id!, bearer));
 route('POST', '/api/graphs/:gid/claims/:id/push', 'lease', ({ graph, params, body, bearer }) =>
   graph.push(params.id!, bearer, { sha: str(body.sha), changedPaths: strs(body.changedPaths) }),
 );
-route('POST', '/api/graphs/:gid/claims/:id/finish', 'lease', ({ graph, params, bearer }) => graph.finish(params.id!, bearer));
+route('POST', '/api/graphs/:gid/claims/:id/finish', 'lease', ({ graph, params, bearer }) => graph.finish(params.gid!, params.id!, bearer));
 route('POST', '/api/graphs/:gid/claims/:id/replan', 'lease', ({ graph, params, body, bearer }) =>
-  graph.replan(params.id!, bearer, {
+  graph.replan(params.gid!, params.id!, bearer, {
     statement: str(body.statement) || undefined,
     scope: Array.isArray(body.scope) ? strs(body.scope) : undefined,
     restsOn: strs(body.restsOn),

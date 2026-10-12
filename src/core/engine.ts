@@ -3,11 +3,13 @@ import type { Store } from './store';
 import type {
   Assumption,
   Claim,
+  ClaimStatus,
   EventType,
   Finding,
   GraphNode,
   KeptBranch,
   Notice,
+  RepoRef,
 } from './types';
 
 export interface Clock {
@@ -35,6 +37,7 @@ export interface NewClaim {
   statement: string;
   scope: string[];
   cluster?: string;
+  line?: string; // the line it builds on; 'main' unless said otherwise
   restsOn?: string[]; // assumption ids
   requires?: string[]; // claim ids this one builds on
   baseSha?: string;
@@ -91,6 +94,7 @@ export class Engine {
       id: this.store.nextId('c'),
       kind: 'claim',
       cluster: input.cluster ?? 'main',
+      line: input.line ?? 'main',
       statement: input.statement,
       scope: input.scope,
       baseSha: input.baseSha,
@@ -123,19 +127,48 @@ export class Engine {
 
   // ---- leases --------------------------------------------------------------
 
-  claim(id: string, agent: string): { token: string; expiresAt: number } {
+  // Take a claim. A lapsed lease can be taken over; so can a stale claim whose
+  // agent is gone, but it stays stale until its new holder re-plans it.
+  claim(id: string, agent: string): { token: string; expiresAt: number; status: ClaimStatus; revoke?: string } {
     const c = this.claimNode(id);
     const now = this.clock.now();
-    const lapsed = c.status === 'claimed' && c.lease !== undefined && c.lease.expiresAt <= now;
-    if (!this.isReady(id) && !lapsed) throw new EngineError('not_ready', `claim ${id} is not ready`);
+    const free = !c.lease || c.lease.expiresAt <= now;
+    const takeover = free && (c.status === 'claimed' || c.status === 'stale');
+    if (!this.isReady(id) && !takeover) throw new EngineError('not_ready', `claim ${id} is not ready`);
     const lease = {
       holder: agent,
       token: this.newToken(),
       expiresAt: now + this.opts.leaseMs,
       cursor: this.latestSeq(),
     };
-    this.store.putNode({ ...c, status: 'claimed', lease });
-    return { token: lease.token, expiresAt: lease.expiresAt };
+    const status = c.status === 'stale' ? 'stale' : 'claimed';
+    this.store.putNode({ ...c, status, lease });
+    // The previous holder's git token, if any, is revoked by the caller.
+    return { token: lease.token, expiresAt: lease.expiresAt, status, revoke: c.lease?.git?.tokenId };
+  }
+
+  // The claim's repo, made after the lease was granted. The base commit is the
+  // line's tip at the moment of forking, unless the planner fixed one.
+  attachRepo(id: string, token: string, repo: RepoRef, baseSha?: string): Claim {
+    const c = this.held(id, token);
+    const next: Claim = { ...c, repo, baseSha: c.baseSha ?? baseSha };
+    this.store.putNode(next);
+    return next;
+  }
+
+  // Put a new git token on the lease. Returns the id of the one it replaces,
+  // which the caller revokes.
+  attachGit(id: string, token: string, git: { tokenId: string; expiresAt: number }): string | undefined {
+    const c = this.held(id, token);
+    this.store.putNode({ ...c, lease: { ...c.lease!, git } });
+    return c.lease!.git?.tokenId;
+  }
+
+  // Hand a claim back before its lease ends. Returns the git token to revoke.
+  release(id: string, token: string): { revoke?: string } {
+    const c = this.held(id, token);
+    this.store.putNode({ ...c, status: c.status === 'stale' ? 'stale' : 'open', lease: undefined });
+    return { revoke: c.lease!.git?.tokenId };
   }
 
   // The renewal reply is how a running agent learns the world moved: it
@@ -170,10 +203,12 @@ export class Engine {
     };
   }
 
-  finish(id: string, token: string): void {
+  // Finish a claim. Returns the git token to revoke: the work is handed in.
+  finish(id: string, token: string): { revoke?: string } {
     const c = this.held(id, token);
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
     this.store.putNode({ ...c, status: 'done', lease: undefined });
+    return { revoke: c.lease!.git?.tokenId };
   }
 
   land(id: string): void {
@@ -337,6 +372,10 @@ export class Engine {
 
   node(id: string): GraphNode | undefined {
     return this.store.getNode(id);
+  }
+
+  getClaim(id: string): Claim {
+    return this.claimNode(id);
   }
 
   events(since = 0) {

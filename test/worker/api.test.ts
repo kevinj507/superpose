@@ -1,5 +1,7 @@
-import { SELF, evictAllDurableObjects } from 'cloudflare:test';
+import { SELF, env, evictAllDurableObjects, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import type { FakeRepoHost } from '../../src/core/fake-host';
+import type { Graph } from '../../src/graph';
 
 const ADMIN = 'test-admin';
 const AGENT = 'test-agent';
@@ -144,5 +146,56 @@ describe('the Durable Object', () => {
     });
     expect(bad.status).toBe(404);
     expect((await api('GET', `${p.g}/snapshot`)).data).toEqual(before);
+  });
+});
+
+// The in-memory git host inside a graph's Durable Object (REPO_HOST=fake).
+function host<T>(gid: string, fn: (h: FakeRepoHost) => T): Promise<T> {
+  const stub = env.GRAPH.get(env.GRAPH.idFromName(gid));
+  return runInDurableObject(stub, (instance: Graph) => fn(instance.repoHost as FakeRepoHost));
+}
+
+describe('repos and git tokens over the API', () => {
+  it('a claim comes with its own repo and a token that lasts as long as the lease', async () => {
+    const gid = `t${++graphSeq}`;
+    const g = `/api/graphs/${gid}`;
+    const seed = await api('POST', `${g}/lines/main/access`, ADMIN, { scope: 'write' });
+    expect(seed.status).toBe(200);
+    expect(seed.data.repo).toBe(`${gid}.line.main`);
+    const base = await host(gid, (h) => h.commit(`${gid}.line.main`, { 'src/a.ts': 'a' }, 'seed').after);
+    expect((await api('POST', `${g}/lines/main/access`, AGENT, { scope: 'write' })).status).toBe(401);
+
+    const c = (await api('POST', `${g}/claims`, ADMIN, { statement: 'c', scope: ['src/**'] })).data;
+    const grant = (await api('POST', `${g}/claims/${c.id}/claim`, AGENT, { agent: 'a1' })).data;
+    expect(grant).toMatchObject({ status: 'claimed', baseSha: base, repo: { name: `${gid}.claim.${c.id}` } });
+    expect(grant.git.expiresAt).toBeLessThanOrEqual(grant.expiresAt);
+    expect(grant.git.expiresAt).toBeGreaterThan(grant.expiresAt - 2000);
+    expect(await host(gid, (h) => h.canPush(grant.repo.name, grant.git.token))).toBe(true);
+
+    const renewed = (await api('POST', `${g}/claims/${c.id}/renew`, grant.token)).data;
+    expect(renewed.ok).toBe(true);
+    expect(await host(gid, (h) => [h.canPush(grant.repo.name, grant.git.token), h.canPush(grant.repo.name, renewed.git.token)]))
+      .toEqual([false, true]);
+
+    const snapshot = JSON.stringify((await api('GET', `${g}/snapshot`)).data);
+    expect(snapshot).not.toContain(grant.git.token);
+    expect(snapshot).not.toContain(renewed.git.token);
+
+    expect((await api('POST', `${g}/claims/${c.id}/finish`, grant.token)).status).toBe(200);
+    expect(await host(gid, (h) => h.canPush(grant.repo.name, renewed.git.token))).toBe(false);
+  });
+
+  it('a released claim can be taken by the next agent, in the same repo', async () => {
+    const gid = `t${++graphSeq}`;
+    const g = `/api/graphs/${gid}`;
+    await api('POST', `${g}/lines/main/access`, ADMIN, { scope: 'write' });
+    await host(gid, (h) => h.commit(`${gid}.line.main`, { 'src/a.ts': 'a' }));
+    const c = (await api('POST', `${g}/claims`, ADMIN, { statement: 'c', scope: ['src/**'] })).data;
+    const first = (await api('POST', `${g}/claims/${c.id}/claim`, AGENT, { agent: 'a1' })).data;
+    expect((await api('POST', `${g}/claims/${c.id}/release`, first.token)).status).toBe(200);
+    expect((await api('GET', `${g}/ready`)).data.map((r: any) => r.id)).toContain(c.id);
+    const second = (await api('POST', `${g}/claims/${c.id}/claim`, AGENT, { agent: 'a2' })).data;
+    expect(second.repo).toEqual(first.repo);
+    expect(await host(gid, (h) => h.canPush(first.repo.name, first.git.token))).toBe(false);
   });
 });
