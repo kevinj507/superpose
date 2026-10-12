@@ -77,6 +77,18 @@ describe('landing while things change', () => {
   });
 });
 
+describe('judging pushes from a base the claim repo holds', () => {
+  it('a base pinned outside the line history falls back to the fork point instead of refusing every push', async () => {
+    const w = await seeded();
+    const elsewhere = w.host.commit((await w.host.ensure('other')).name, { 'z.txt': 'z' }, 'unrelated').after;
+    const c = w.engine.addClaim({ statement: 'c', scope: ['src/a/**'], baseSha: elsewhere });
+    const g = await w.coord.claim(c.id, 'agent');
+    const sha = w.host.commit(g.repo.name, { 'src/a/x.ts': 'x2' }, `w\n\nSuperpose-Claim: ${c.id}`).after;
+    const record = await w.coord.notePush(c.id, g.token, sha);
+    expect(record).toMatchObject({ accepted: true, paths: ['src/a/x.ts'] });
+  });
+});
+
 describe('claims that rest on something already contradicted', () => {
   it('handed back, such a claim is stale, so the next agent can take it and must re-plan', async () => {
     const w = await seeded();

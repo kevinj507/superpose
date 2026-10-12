@@ -37,7 +37,6 @@ export interface ClaimGrant {
 
 export interface RenewGrant extends RenewResult {
   git?: GitAccess;
-  line?: GitAccess & { head?: string }; // renewed read access to the line, for a reopened claim
 }
 
 // The claim lifecycle across the graph and the git host. The engine decides
@@ -124,7 +123,8 @@ export class Coordinator {
     if (!c.repo) return result;
     try {
       // (A reopened claim's read token on its line is minted once, when it
-      // is taken; the runner merges the line in straight away.)
+      // is taken, and lasts that first lease term: the line is to be fetched
+      // straight away. Taking the claim again mints a new one.)
       return { ...result, git: await this.grantGit(id, token, result.expiresAt!, c.repo) };
     } catch {
       // The lease is renewed; the previous git token still works until it
@@ -194,7 +194,13 @@ export class Coordinator {
     // A reopened claim is judged from the newest line commit its push
     // contains: the base its landing's `git merge` will use. Line work merged
     // in is then not the claim's own change, whichever line head it merged.
-    const base = c.rebase ? await this.lineBase(c, push.sha) : (c.baseSha ?? null);
+    // (Landing judges the exact merge again: see outsideScope.)
+    let base = c.rebase ? await this.lineBase(c, push.sha) : (c.baseSha ?? null);
+    // A base the claim's repo does not hold (a base pinned by the planner
+    // outside the line's history, or a reopened claim forked from an empty
+    // line) cannot be compared with, so the push is judged from where the
+    // claim was forked instead of failing as an unknown commit.
+    if (base && !(await this.host.readCommit(c.repo.name, base))) base = c.forkSha ?? null;
     if (known) {
       // Seen before but refused: judge it again as it stands now, from the
       // complete list of files if the stored one was cut short.
