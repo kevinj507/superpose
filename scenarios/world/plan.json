@@ -162,7 +162,7 @@
     {
       "key": "links",
       "line": "main",
-      "statement": "Stable world links: a link to a world (its seed) keeps showing the same towns, rivers and roads after later changes to other modules. Prove it with a test that changes how much randomness the forests module draws and checks that the towns do not move",
+      "statement": "Stable world links: a link to a world (its seed) keeps showing the same towns and the same town names after later changes to other modules. Prove it with a test that runs the world with a forests module that draws more random numbers than the real one, and checks that the towns and their names do not change",
       "scope": [
         "test/links.test.js",
         "src/links.js"
@@ -309,7 +309,7 @@
     {
       "key": "links-b",
       "line": "own-streams",
-      "statement": "Stable world links: a link to a world (its seed) keeps showing the same towns, rivers and roads after later changes to other modules. Prove it with a test that changes how much randomness the forests module draws and checks that the towns do not move",
+      "statement": "Stable world links: a link to a world (its seed) keeps showing the same towns and the same town names after later changes to other modules. Prove it with a test that runs the world with a forests module that draws more random numbers than the real one, and checks that the towns and their names do not change",
       "scope": [
         "test/links.test.js",
         "src/links.js"
