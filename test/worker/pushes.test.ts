@@ -118,3 +118,13 @@ describe('push events', () => {
     expect(r.data.error).toBe('unknown_commit');
   });
 });
+
+describe('reporting spend', () => {
+  it('never hands back the claim, whose lease token belongs to its holder', async () => {
+    const w = await twoClaims();
+    const r = await api('POST', `${w.g}/claims/${w.api.id}/spend`, AGENT, { usd: 0.01, turns: 3 });
+    expect(r.status).toBe(200);
+    expect(JSON.stringify(r.data)).not.toContain(w.api.lease);
+    expect(r.data).toMatchObject({ usd: 0.01, turns: 3, runs: 1 });
+  });
+});

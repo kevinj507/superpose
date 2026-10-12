@@ -109,8 +109,9 @@ export class Graph extends DurableObject<Env> {
     });
   }
 
+  // Returns only the spend: the claim itself carries its holder's lease token.
   recordSpend(id: string, input: { usd: number; turns: number; model?: string }) {
-    return this.run((e) => e.recordSpend(id, input));
+    return this.run((e) => e.recordSpend(id, input).spend);
   }
 
   why(path: string, line?: string) {
