@@ -380,10 +380,8 @@ function structureKey(nodes, edges) {
     .map((n) => (n.kind === 'claim' ? `${n.id}:${n.cluster ?? ''}` : n.kind === 'finding' ? `${n.id}:${n.finder ?? ''}` : n.id))
     .sort()
     .join(',');
-  const es = edges
-    .map((e) => `${e.source}>${e.target}:${e.purpose}`)
-    .sort()
-    .join(',');
+  // Edge order matters: a claim hangs under the first assumption it declared.
+  const es = edges.map((e) => `${e.source}>${e.target}:${e.purpose}`).join(',');
   return `${ids}|${es}`;
 }
 
