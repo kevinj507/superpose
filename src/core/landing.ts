@@ -34,14 +34,20 @@ git init -q -b main
 git config user.name "Superpose"
 git config user.email "land@superpose.invalid"
 git config core.hooksPath /dev/null
-git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" fetch -q "$LINE_REMOTE" main || exit ${EXIT_FETCH_FAILED}
-git checkout -q -B main FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
-echo "BASE $(git rev-parse HEAD)"
-git -c http.extraHeader="Authorization: Bearer $CLAIM_TOKEN" fetch -q "$CLAIM_REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
-if ! git merge -q --no-ff -m "$MESSAGE" FETCH_HEAD; then
-  echo "CONFLICT"
-  git diff --name-only --diff-filter=U
-  exit ${EXIT_MERGE_CONFLICT}
+if git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" ls-remote --exit-code "$LINE_REMOTE" refs/heads/main > /dev/null 2>&1; then
+  git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" fetch -q "$LINE_REMOTE" main || exit ${EXIT_FETCH_FAILED}
+  git checkout -q -B main FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
+  echo "BASE $(git rev-parse HEAD)"
+  git -c http.extraHeader="Authorization: Bearer $CLAIM_TOKEN" fetch -q "$CLAIM_REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
+  if ! git merge -q --no-ff -m "$MESSAGE" FETCH_HEAD; then
+    echo "CONFLICT"
+    git diff --name-only --diff-filter=U
+    exit ${EXIT_MERGE_CONFLICT}
+  fi
+else
+  # A line with no commits yet: the claim's work becomes its first history.
+  git -c http.extraHeader="Authorization: Bearer $CLAIM_TOKEN" fetch -q "$CLAIM_REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
+  git checkout -q -B main FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
 fi
 git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" push -q --no-verify -f "$LINE_REMOTE" "HEAD:$STAGING" || exit ${EXIT_PUSH_REJECTED}
 echo "MERGED $(git rev-parse HEAD)"
@@ -81,16 +87,20 @@ export async function mergeForLanding(host: RepoHost, exec: Exec, job: LandingJo
     const claimToken = await host.mintToken(job.claim.name, 'read', TOKEN_TTL);
     try {
       const outcome = await exec({
-        script: MERGE_SCRIPT,
-        env: {
-          LINE_TOKEN: lineToken.secret,
-          LINE_REMOTE: job.line.remote,
-          CLAIM_TOKEN: claimToken.secret,
-          CLAIM_REMOTE: job.claim.remote,
-          SHA: job.sha,
-          MESSAGE: landingMessage(job.claimId, job.statement),
-          STAGING: stagingRef(job.claimId),
-        },
+        steps: [
+          {
+            script: MERGE_SCRIPT,
+            env: {
+              LINE_TOKEN: lineToken.secret,
+              LINE_REMOTE: job.line.remote,
+              CLAIM_TOKEN: claimToken.secret,
+              CLAIM_REMOTE: job.claim.remote,
+              SHA: job.sha,
+              MESSAGE: landingMessage(job.claimId, job.statement),
+              STAGING: stagingRef(job.claimId),
+            },
+          },
+        ],
         timeoutSeconds: 120,
       });
       return mergeResult(outcome);
@@ -111,8 +121,7 @@ export async function promoteLanding(host: RepoHost, exec: Exec, line: RepoRef, 
   const lineToken = await host.mintToken(line.name, 'write', TOKEN_TTL);
   try {
     const outcome = await exec({
-      script: PROMOTE_SCRIPT,
-      env: { LINE_TOKEN: lineToken.secret, LINE_REMOTE: line.remote, STAGING: stagingRef(claimId), MERGE: merge },
+      steps: [{ script: PROMOTE_SCRIPT, env: { LINE_TOKEN: lineToken.secret, LINE_REMOTE: line.remote, STAGING: stagingRef(claimId), MERGE: merge } }],
       timeoutSeconds: 120,
     });
     const log = logOf(outcome);

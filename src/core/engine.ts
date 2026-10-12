@@ -19,6 +19,7 @@ import type {
 } from './types';
 
 const MAIN = 'refs/heads/main';
+const MAX_STORED_PATHS = 500;
 
 export interface Clock {
   now(): number;
@@ -303,19 +304,23 @@ export class Engine {
       return upgraded;
     }
     const outside = outOfScope(input.paths, c.scope);
+    // What is kept per commit is bounded, so one huge commit cannot outgrow
+    // a stored row; the counts say how much there was.
     const row: PushRecord = {
       claim: id,
       sha: input.sha,
       ref: input.ref,
       before: input.before,
       at: this.clock.now(),
-      paths: [...input.paths],
-      outside,
+      paths: input.paths.slice(0, MAX_STORED_PATHS),
+      outside: outside.slice(0, MAX_STORED_PATHS),
       accepted: !reason,
       verdict: outside.length ? 'scope-violation' : 'unverified',
     };
     if (reason) row.reason = reason;
-    if (input.unattributed?.length) row.unattributed = [...input.unattributed];
+    if (input.paths.length > MAX_STORED_PATHS) row.pathCount = input.paths.length;
+    if (outside.length > MAX_STORED_PATHS) row.outsideCount = outside.length;
+    if (input.unattributed?.length) row.unattributed = input.unattributed.slice(0, MAX_STORED_PATHS);
     this.store.putPush(row);
     if (row.accepted) this.store.putNode({ ...c, headSha: input.sha, headSeenAt: seenAt, pushes: c.pushes + 1 });
     this.notifyTouched(c, outside, input.sha);
@@ -347,13 +352,15 @@ export class Engine {
   // Start checks on a commit unless a run is already going (two flows for
   // the same commit: the push event and a re-check, say). A run silent for
   // longer than `staleAfterMs` is taken over.
-  beginCheck(id: string, sha: string, command: string, staleAfterMs = 45 * 60_000): boolean {
+  beginCheck(id: string, sha: string, command: string, owner?: string, staleAfterMs = 45 * 60_000): boolean {
     const row = this.store.getPush(id, sha);
     if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
     const now = this.clock.now();
+    // The same run asking again (a retried step) gets the same answer.
+    if (row.checks?.status === 'running' && owner && row.checks.runner === owner) return true;
     if (row.checks?.status === 'running' && now - row.checks.startedAt < staleAfterMs) return false;
     if (row.checks && row.checks.status !== 'running') return false;
-    this.store.putPush({ ...row, checks: { status: 'running', command, startedAt: now } });
+    this.store.putPush({ ...row, checks: { status: 'running', command, startedAt: now, ...(owner ? { runner: owner } : {}) } });
     return true;
   }
 
@@ -513,6 +520,29 @@ export class Engine {
       this.store.putLine({ ...line, landing: { id: landing, claim: next.id, sha: next.headSha, startedAt: now } });
       return { claim: next.id, sha: next.headSha, landing };
     }
+  }
+
+  // A person gives up on the landing in flight on a line (its Workflow is
+  // known to be gone): the claim goes back to the queue as a failed attempt.
+  abandonLanding(lineName: string): string | null {
+    const line = this.line(lineName);
+    if (!line.landing) return null;
+    const { claim } = line.landing;
+    this.store.putLine({ ...line, landing: undefined });
+    const c = this.claimNode(claim);
+    if (c.landing?.status === 'landing') this.failLanding(claim, { status: 'error', log: 'given up on by an admin' });
+    return claim;
+  }
+
+  // A landing that could not even be started (the Workflow was not created)
+  // goes back to the queue without using up an attempt.
+  abortLanding(lineName: string, id: string, landing: string): void {
+    const line = this.line(lineName);
+    if (line.landing?.id !== landing) return;
+    this.store.putLine({ ...line, landing: undefined });
+    const c = this.claimNode(id);
+    const attempts = c.landing?.attempts ?? 0;
+    this.store.putNode({ ...c, landing: attempts ? { status: 'error', at: this.clock.now(), attempts } : undefined });
   }
 
   // Apply a landing's outcome, if it is the landing the line is waiting for.
@@ -739,11 +769,11 @@ export class Engine {
 
   // Nodes with lease tokens removed, safe to show to anyone.
   nodesForDisplay(): GraphNode[] {
-    return this.store.allNodes().map((n) => {
-      if (n.kind !== 'claim' || !n.lease) return n;
-      const { token: _secret, ...lease } = n.lease;
-      return { ...n, lease: { ...lease, token: '' } };
-    });
+    return this.store.allNodes().map(forDisplay);
+  }
+
+  readyForDisplay(): GraphNode[] {
+    return this.ready().map(forDisplay);
   }
 
   // ---- internals ---------------------------------------------------------------
@@ -932,4 +962,10 @@ function verdictFor(outside: string[], checks: CheckRun | undefined): Verdict {
     default:
       return 'unverified';
   }
+}
+
+function forDisplay(n: GraphNode): GraphNode {
+  if (n.kind !== 'claim' || !n.lease) return n;
+  const { token: _secret, ...lease } = n.lease;
+  return { ...n, lease: { ...lease, token: '' } };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHECK_SCRIPT, EXIT_FETCH_FAILED, checkRunFrom, readCheckConfig, runCheck, type ExecJob } from '../src/core/checks';
+import { CHECK_SCRIPT, EXIT_FETCH_FAILED, FETCH_SCRIPT, RUN_SCRIPT, checkRunFrom, readCheckConfig, runCheck, type ExecJob } from '../src/core/checks';
 import { FakeRepoHost, MapKeyValue } from '../src/core/fake-host';
 
 const clock = { t: 5_000, now() { return this.t; } };
@@ -38,9 +38,14 @@ describe('running checks on one commit', () => {
     const jobs: ExecJob[] = [];
     const run = await runCheck(host, async (job) => (jobs.push(job), { exitCode: 0, stdout: 'ok 1', stderr: '', ms: 10 }), { name: 'r', remote: 'https://git/r.git' }, sha, { check: 'npm test', timeoutSeconds: 60 }, () => clock.now());
     expect(run).toMatchObject({ status: 'passed', exitCode: 0, command: 'npm test', log: 'ok 1' });
-    expect(jobs[0]!.script).toBe(CHECK_SCRIPT);
-    expect(jobs[0]!.script).not.toContain(jobs[0]!.env.GIT_TOKEN!);
-    expect(jobs[0]!.env).toMatchObject({ REMOTE: 'https://git/r.git', SHA: sha, CHECK: 'npm test', TIMEOUT: '60' });
+    const [fetch, check] = jobs[0]!.steps;
+    expect(fetch!.script).toBe(FETCH_SCRIPT);
+    expect(fetch!.env).toMatchObject({ REMOTE: 'https://git/r.git', SHA: sha });
+    expect(fetch!.script).not.toContain(fetch!.env.GIT_TOKEN!);
+    // The step that runs the repo's code gets no token at all.
+    expect(check!.script).toBe(RUN_SCRIPT);
+    expect(Object.keys(check!.env).some((k) => /TOKEN/.test(k))).toBe(false);
+    expect(check!.env).toMatchObject({ CHECK: 'npm test', TIMEOUT: '60' });
     const [token] = host.tokens('r');
     expect(token).toMatchObject({ scope: 'read', revoked: true });
   });
@@ -57,10 +62,10 @@ describe('running checks on one commit', () => {
 });
 
 describe('the check script', () => {
-  it('drops the token before any code from the repo runs, and runs no git hooks', () => {
-    const unset = CHECK_SCRIPT.indexOf('unset GIT_TOKEN');
-    expect(unset).toBeGreaterThan(CHECK_SCRIPT.indexOf('git checkout'));
-    expect(unset).toBeLessThan(CHECK_SCRIPT.indexOf('$SETUP'));
-    expect(CHECK_SCRIPT).toContain('core.hooksPath /dev/null');
+  it('fetches with the token in one process and runs repo code in another, with no git hooks', () => {
+    expect(FETCH_SCRIPT).toContain('core.hooksPath /dev/null');
+    expect(FETCH_SCRIPT).not.toMatch(/\$SETUP|\$CHECK/);
+    expect(RUN_SCRIPT).not.toMatch(/TOKEN/);
+    expect(CHECK_SCRIPT).toBe(FETCH_SCRIPT + RUN_SCRIPT);
   });
 });

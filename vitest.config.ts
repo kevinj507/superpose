@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     projects: [
       {
-        test: { name: 'core', include: ['test/*.test.ts'] },
+        test: { name: 'core', include: ['test/*.test.ts', 'test/*.test.mjs'] },
       },
       {
         plugins: [

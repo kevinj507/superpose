@@ -63,7 +63,7 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
     // Only one run per commit: another flow for the same commit (a re-check,
     // or the platform's own check at finish) leaves it to this one.
     const mine = await step.do('start the checks, unless already running', async () => {
-      const r = await stub.beginCheck(claim, record.sha, config.check);
+      const r = await stub.beginCheck(claim, record.sha, config.check, event.instanceId);
       return r.ok && r.value;
     });
     if (!mine) return { ...handled, skipped: 'checks already running for this commit' };

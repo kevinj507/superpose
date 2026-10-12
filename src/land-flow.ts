@@ -25,7 +25,7 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
     const host = new ArtifactsHost(this.env.ARTIFACTS!);
     const container = (phase: string) => (job: ExecJob) =>
       this.env.CHECKER.get(this.env.CHECKER.idFromName(`land:${graph}:${landing}:${phase}`)).run(job);
-    const retry = { retries: { limit: 2, delay: '20 seconds' as const, backoff: 'linear' as const }, timeout: '20 minutes' as const };
+    const retry = { retries: { limit: 2, delay: '20 seconds' as const, backoff: 'linear' as const }, timeout: '6 minutes' as const };
 
     const outcome = await (async (): Promise<LandingOutcome> => {
       const ctx = await step.do('find the line and the claim', async () => {
@@ -46,7 +46,7 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
       if (config) {
         let run: CheckRun;
         // Room for the setup and the check, each bounded by the timebox.
-        const budget = { ...retry, timeout: `${config.timeoutSeconds * 2 + 300} seconds` as const };
+        const budget = { retries: { limit: 1, delay: '20 seconds' as const, backoff: 'linear' as const }, timeout: `${config.timeoutSeconds * 2 + 300} seconds` as const };
         try {
           run = await step.do('run the checks on the merged result', budget, async () => {
             const result = await checkMerged(host, container('check'), ctx.line, merged.merge, config);

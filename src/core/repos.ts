@@ -18,6 +18,8 @@ export interface RepoHost {
   readFile(repo: string, ref: string, path: string): Promise<string | null>;
   // Delete a repo (when its graph is deleted).
   remove(repo: string): Promise<void>;
+  // Every repo whose name starts with `prefix`.
+  list(prefix: string): Promise<string[]>;
 }
 
 export interface HostRepo extends RepoRef {
@@ -41,6 +43,7 @@ export interface HostTreeEntry {
   name: string;
   type: 'tree' | 'blob';
   hash: string;
+  mode?: string; // a mode change (made executable, turned into a symlink) is a change
 }
 
 // What an agent gets to work in its claim's repo.
@@ -102,6 +105,8 @@ export class UnknownCommitError extends Error {
 // list, so the scope check compares trees, descending only into directories
 // whose hashes differ. A missing `before` (a new branch) compares against an
 // empty tree.
+export const MAX_CHANGED_PATHS = 5000;
+
 export async function changedPaths(host: RepoHost, repo: string, before: string | null, after: string): Promise<string[]> {
   const treeOf = async (sha: string | null) => {
     if (!sha || NO_COMMIT.test(sha)) return null;
@@ -128,9 +133,12 @@ async function diffTrees(
   const names = new Set([...left.keys(), ...right.keys()]);
   const pending: Promise<void>[] = [];
   for (const name of names) {
+    // A commit that changes thousands of files (a vendored dependency, say)
+    // is judged on the first few thousand; the rest add nothing to a verdict.
+    if (out.length >= MAX_CHANGED_PATHS) break;
     const x = left.get(name);
     const y = right.get(name);
-    if (x && y && x.hash === y.hash && x.type === y.type) continue;
+    if (x && y && x.hash === y.hash && x.type === y.type && x.mode === y.mode) continue;
     const path = prefix + name;
     const xTree = x?.type === 'tree' ? x.hash : null;
     const yTree = y?.type === 'tree' ? y.hash : null;

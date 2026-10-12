@@ -151,6 +151,7 @@ export interface CheckRun {
   command?: string;
   exitCode?: number;
   log?: string; // the tail of the output
+  runner?: string; // which run owns it (a Workflow instance)
   startedAt: number;
   finishedAt?: number;
 }
@@ -161,8 +162,10 @@ export interface PushRecord {
   ref: string;
   before: string | null; // the previous tip, as the push reported it
   at: number;
-  paths: string[]; // files this commit changes relative to the claim's base
-  outside: string[]; // of those, the ones outside the declared scope
+  paths: string[]; // files this commit changes relative to the claim's base (the first 500)
+  outside: string[]; // of those, the ones outside the declared scope (the first 500)
+  pathCount?: number; // when more were changed than are listed
+  outsideCount?: number;
   accepted: boolean; // became the claim's head
   reason?: 'stale' | 'not-head' | 'other-branch' | 'not-claimed';
   verdict: Verdict;

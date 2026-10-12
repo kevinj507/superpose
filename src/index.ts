@@ -91,6 +91,7 @@ route('POST', '/api/graphs/:gid/lines/:line', 'admin', ({ graph, params, body })
   return graph.createLine(params.gid!, { name: params.line!, from: str(body.from), ...labels });
 });
 route('POST', '/api/graphs/:gid/lines/:line/serve', 'admin', ({ graph, params }) => graph.serve(params.line!));
+route('POST', '/api/graphs/:gid/lines/:line/abandon-landing', 'admin', ({ graph, params }) => graph.abandonLanding(params.gid!, params.line!));
 route('POST', '/api/graphs/:gid/lines/:line/access', 'admin', ({ graph, params, body }) =>
   graph.lineAccess(params.gid!, params.line!, body.scope === 'write' ? 'write' : 'read', Number(body.ttl) || 3600),
 );

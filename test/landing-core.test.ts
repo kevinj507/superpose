@@ -108,3 +108,14 @@ describe('reading a landing\'s outcome', () => {
     expect(landingMessage('c12', 'Rate limits  live\nin a Durable Object')).toBe('Land c12: Rate limits live in a Durable Object\n\nSuperpose-Claim: c12');
   });
 });
+
+describe('giving up on a stuck landing', () => {
+  it('unlocks the line and puts the claim back in the queue as a failed attempt', () => {
+    const w = setup();
+    const a = w.done('a');
+    w.engine.beginNextLanding('main');
+    expect(w.engine.abandonLanding('main')).toBe(a);
+    expect(w.engine.getClaim(a).landing).toMatchObject({ status: 'error', attempts: 1 });
+    expect(w.engine.beginNextLanding('main')?.claim).toBe(a);
+  });
+});

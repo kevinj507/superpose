@@ -130,3 +130,55 @@ describe('checks start once per commit', () => {
     expect(() => w.engine.replan(w.id, w.token, { scope: ['**'], restsOn: [] })).toThrow(/not stale/);
   });
 });
+
+describe('platform review fixes', () => {
+  it('a retried step that already started the checks is told to go on', () => {
+    const w = setup();
+    w.push('s1', ['src/rate/a.ts']);
+    expect(w.engine.beginCheck(w.id, 's1', 'npm test', 'run-1')).toBe(true);
+    expect(w.engine.beginCheck(w.id, 's1', 'npm test', 'run-1')).toBe(true);
+    expect(w.engine.beginCheck(w.id, 's1', 'npm test', 'run-2')).toBe(false);
+  });
+
+  it('keeps at most 500 paths of a huge commit, with the counts', () => {
+    const w = setup();
+    const paths = Array.from({ length: 1200 }, (_, i) => `vendor/${i}.js`);
+    const row = w.push('big', paths);
+    expect(row.paths).toHaveLength(500);
+    expect(row).toMatchObject({ pathCount: 1200, outsideCount: 1200, verdict: 'scope-violation' });
+  });
+
+  it('a landing that could not be started goes back to the queue without using an attempt', () => {
+    const w = setup();
+    w.push('s1', ['src/rate/a.ts']);
+    w.engine.recordCheck(w.id, 's1', { status: 'passed', exitCode: 0, startedAt: 0, finishedAt: 0 });
+    w.engine.finish(w.id, w.token);
+    const first = w.engine.beginNextLanding('main')!;
+    w.engine.abortLanding('main', w.id, first.landing);
+    expect(w.engine.getClaim(w.id).landing).toBeUndefined();
+    expect(w.engine.beginNextLanding('main')?.claim).toBe(w.id);
+  });
+
+  it('the ready list never carries lease tokens', () => {
+    const w = setup();
+    w.clock.t += 60_001; // the lease lapsed, so the claim is offered again
+    const offered = w.engine.readyForDisplay() as { lease?: { token: string } }[];
+    expect(offered).toHaveLength(1);
+    expect(offered[0]!.lease!.token).toBe('');
+  });
+});
+
+describe('a change of mode is a change', () => {
+  it('making a file executable outside the scope is caught', async () => {
+    const { changedPaths } = await import('../src/core/repos');
+    const trees: Record<string, { name: string; type: 'tree' | 'blob'; hash: string; mode?: string }[]> = {
+      t1: [{ name: 'deploy.sh', type: 'blob', hash: 'b1', mode: '100644' }],
+      t2: [{ name: 'deploy.sh', type: 'blob', hash: 'b1', mode: '100755' }],
+    };
+    const host = {
+      readCommit: async (_r: string, sha: string) => ({ sha, tree: sha === 'c1' ? 't1' : 't2', parents: [], message: '' }),
+      readTree: async (_r: string, t: string) => trees[t]!,
+    } as unknown as import('../src/core/repos').RepoHost;
+    expect(await changedPaths(host, 'r', 'c1', 'c2')).toEqual(['deploy.sh']);
+  });
+});

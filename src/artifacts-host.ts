@@ -48,7 +48,18 @@ export class ArtifactsHost implements RepoHost {
     const entries = await this.withRepo(repo, (r) => r.readTree(tree));
     if (!entries) return null;
     // Submodules (gitlink) and symlinks are leaves, like files.
-    return entries.map((e) => ({ name: e.name, type: e.type === 'tree' ? 'tree' : 'blob', hash: e.hash }));
+    return entries.map((e) => ({ name: e.name, type: e.type === 'tree' ? 'tree' : 'blob', hash: e.hash, mode: e.mode }));
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    const out: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.artifacts.list({ limit: 100, cursor });
+      for (const r of page.repos) if (r.name.startsWith(prefix)) out.push(r.name);
+      cursor = page.cursor ?? undefined;
+    } while (cursor);
+    return out;
   }
 
   async remove(repo: string): Promise<void> {

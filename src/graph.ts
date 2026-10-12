@@ -13,6 +13,9 @@ export type Result<T> = { ok: true; value: T } | { ok: false; code: string; mess
 
 const DEFAULT_LEASE_MS = 10 * 60_000;
 const DEFAULT_HEDGE_MS = 30 * 60_000;
+// Longer than a landing's steps can take with their retries, so only a
+// landing whose Workflow is gone is given up on.
+const LANDING_TIMEOUT_MS = 2 * 60 * 60_000;
 
 // One Durable Object per project graph: the single writer for coordination
 // state. Every call runs in one SQLite transaction, so an engine error leaves
@@ -33,6 +36,7 @@ export class Graph extends DurableObject<Env> {
       leaseMs: this.leaseMs,
       hedgeMs: Number(env.HEDGE_MS ?? DEFAULT_HEDGE_MS),
       dependencyGate: 'landed',
+      landingTimeoutMs: LANDING_TIMEOUT_MS,
     });
     if (env.REPO_HOST === 'fake') this.repoHost = new FakeRepoHost(ctx.storage.kv);
     else if (env.ARTIFACTS) this.repoHost = new ArtifactsHost(env.ARTIFACTS);
@@ -53,6 +57,8 @@ export class Graph extends DurableObject<Env> {
   // Calls that also touch the git host. The graph's name is passed in because
   // repo names carry it.
   private async runWithRepos<T>(graph: string, fn: (c: Coordinator) => Promise<T>): Promise<Result<T>> {
+    // Remembered for work this object starts on its own (an alarm).
+    if (this.ctx.storage.kv.get<string>('graph') !== graph) this.ctx.storage.kv.put('graph', graph);
     const coordinator = new Coordinator(this.tx, this.repoHost, { graph });
     try {
       return { ok: true, value: await fn(coordinator) };
@@ -73,7 +79,7 @@ export class Graph extends DurableObject<Env> {
   }
 
   ready() {
-    return this.run((e) => e.ready());
+    return this.run((e) => e.readyForDisplay());
   }
 
   claim(graph: string, id: string, agent: string) {
@@ -162,8 +168,14 @@ export class Graph extends DurableObject<Env> {
     return r;
   }
 
-  beginCheck(id: string, sha: string, command: string) {
-    return this.run((e) => e.beginCheck(id, sha, command));
+  async abandonLanding(graph: string, line: string) {
+    const r = this.run((e) => e.abandonLanding(line));
+    await this.pumpLandings(graph);
+    return r;
+  }
+
+  beginCheck(id: string, sha: string, command: string, owner?: string) {
+    return this.run((e) => e.beginCheck(id, sha, command, owner));
   }
 
   // Start the next landing on every line that has none in flight.
@@ -184,14 +196,24 @@ export class Graph extends DurableObject<Env> {
           continue;
         }
         try {
-          await this.env.LANDINGS!.create({ params: { graph, line, claim, sha, landing } });
+          await this.env.LANDINGS!.create({ id: landing, params: { graph, line, claim, sha, landing } });
         } catch (err) {
-          this.run((e) => e.completeLanding(line, claim, { status: 'error', log: `could not start the landing: ${String(err)}` }, landing));
-          continue;
+          // Created by an earlier try whose answer was lost: it is running.
+          if (/already exists/i.test(String(err))) break;
+          // Not started: back in the queue without using up an attempt, and
+          // tried again shortly.
+          this.run((e) => e.abortLanding(line, claim, landing));
+          await this.ctx.storage.setAlarm(Date.now() + 30_000);
         }
         break;
       }
     }
+  }
+
+  // Retry landings that could not be started.
+  async alarm() {
+    const graph = this.ctx.storage.kv.get<string>('graph');
+    if (graph) await this.pumpLandings(graph);
   }
 
   // In local mode nothing runs checks, so a push is recorded as declaring
@@ -285,16 +307,27 @@ export class Graph extends DurableObject<Env> {
 
   // Delete the whole graph: its repos on the git host, then everything stored.
   async destroy(graph: string): Promise<Result<{ repos: number }>> {
+    // Every repo of this graph on the host, recorded or not (a fork made by a
+    // claim that was then handed back is not recorded anywhere).
     const names = new Set<string>([lineRepoName(graph, 'main')]);
     for (const l of this.engine.lines()) if (l.repo) names.add(l.repo.name);
     for (const c of this.engine.claims()) if (c.repo) names.add(c.repo.name);
-    for (const name of names) await this.repoHost.remove(name).catch(() => {});
+    try {
+      for (const n of await this.repoHost.list(`${graph}.`)) names.add(n);
+    } catch {
+      // Listing failed: delete what is recorded.
+    }
+    const failed: string[] = [];
+    for (const name of names) await this.repoHost.remove(name).catch(() => failed.push(name));
+    // Keep the graph if any repo is still there, so trying again finds them.
+    if (failed.length) return { ok: false, code: 'repo_unavailable', message: `could not delete ${failed.join(', ')}; try again` };
     await this.ctx.storage.deleteAll();
     this.store = new SqlStore(this.ctx.storage.sql);
     this.engine = new Engine(this.store, { now: () => Date.now() }, {
       leaseMs: this.leaseMs,
       hedgeMs: Number(this.env.HEDGE_MS ?? DEFAULT_HEDGE_MS),
       dependencyGate: 'landed',
+      landingTimeoutMs: LANDING_TIMEOUT_MS,
     });
     return { ok: true, value: { repos: names.size } };
   }
@@ -328,5 +361,6 @@ function missingHost(): RepoHost {
     readHead: fail,
     readFile: fail,
     remove: fail,
+    list: fail,
   };
 }

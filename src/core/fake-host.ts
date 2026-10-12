@@ -58,6 +58,7 @@ export class FakeRepoHost implements RepoHost {
     if (existing) return this.describe(existing);
     const repo: StoredRepo = { name };
     this.kv.put(`repo:${name}`, repo);
+    this.index(name, true);
     return this.describe(repo);
   }
 
@@ -70,6 +71,7 @@ export class FakeRepoHost implements RepoHost {
     if (!src) throw hostError('NOT_FOUND', `no repo ${source}`);
     const repo: StoredRepo = { name, head: src.head, source };
     this.kv.put(`repo:${name}`, repo);
+    this.index(name, true);
     return this.describe(repo);
   }
 
@@ -112,6 +114,18 @@ export class FakeRepoHost implements RepoHost {
   async remove(repo: string): Promise<void> {
     this.calls.push(`remove ${repo}`);
     this.kv.delete(`repo:${repo}`);
+    this.index(repo, false);
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    return (this.kv.get<string[]>('repos') ?? []).filter((n) => n.startsWith(prefix));
+  }
+
+  private index(name: string, present: boolean) {
+    const names = new Set(this.kv.get<string[]>('repos') ?? []);
+    if (present) names.add(name);
+    else names.delete(name);
+    this.kv.put('repos', [...names]);
   }
 
   async readFile(repo: string, ref: string, path: string): Promise<string | null> {

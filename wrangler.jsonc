@@ -19,7 +19,7 @@
     {
       "class_name": "Checker",
       "image": "docker.io/library/node:22-bookworm",
-      "max_instances": 8,
+      "max_instances": 20,
       "instance_type": "basic"
     }
   ],

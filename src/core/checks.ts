@@ -40,25 +40,40 @@ export const EXIT_FETCH_FAILED = 90;
 export const EXIT_MERGE_CONFLICT = 91;
 export const EXIT_PUSH_REJECTED = 93;
 
-// Runs in a fresh container: fetch exactly one commit, then the setup and the
-// check, each bounded by `timeout` (an exec's own timeout does not bound wall
-// time). The git token arrives in the environment, never in the script.
-export const CHECK_SCRIPT = `
+// A check runs in a fresh container as two separate processes, so code from
+// the repo never runs in a process that was given a token:
+//   1. FETCH_SCRIPT, with the read token: fetch exactly one commit;
+//   2. RUN_SCRIPT, with no token: the setup and the check, each bounded by
+//      `timeout` (an exec's own timeout does not bound wall time), with their
+//      output kept to its last 64 KB inside the container.
+export const FETCH_SCRIPT = `
 set -u
 rm -rf /work && mkdir -p /work && cd /work
 git init -q
 git config core.hooksPath /dev/null
 git -c http.extraHeader="Authorization: Bearer $GIT_TOKEN" fetch -q --depth 1 "$REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
 git checkout -q FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
-# From here on, code from the repo runs: it gets no token.
-unset GIT_TOKEN
+`;
+
+export const RUN_SCRIPT = `
+set -u
+cd /work || exit ${EXIT_FETCH_FAILED}
+run() {
+  timeout -k 5 "$TIMEOUT" sh -c "$1" > /tmp/out.log 2>&1
+  code=$?
+  tail -c 65536 /tmp/out.log
+  return $code
+}
 if [ -n "\${SETUP:-}" ]; then
   echo "\\$ $SETUP"
-  timeout -k 5 "$TIMEOUT" sh -c "$SETUP" 2>&1 || exit $?
+  run "$SETUP" || exit $?
 fi
 echo "\\$ $CHECK"
-timeout -k 5 "$TIMEOUT" sh -c "$CHECK" 2>&1
+run "$CHECK"
 `;
+
+// Kept for tests that look at the whole check as one script.
+export const CHECK_SCRIPT = FETCH_SCRIPT + RUN_SCRIPT;
 
 export interface ExecOutcome {
   exitCode: number | null;
@@ -99,9 +114,11 @@ function parseJson(text: string): Record<string, unknown> | null {
   }
 }
 
+// A job is one or more steps run one after another in the same container,
+// each a separate process with its own environment; the first that fails
+// ends the job with its exit code.
 export interface ExecJob {
-  script: string;
-  env: Record<string, string>;
+  steps: { script: string; env: Record<string, string> }[];
   timeoutSeconds: number;
 }
 
@@ -119,15 +136,10 @@ export async function runCheck(
   const token = await host.mintToken(repo.name, 'read', Math.max(60, config.timeoutSeconds * 2 + 120));
   try {
     const outcome = await exec({
-      script: CHECK_SCRIPT,
-      env: {
-        GIT_TOKEN: token.secret,
-        REMOTE: repo.remote,
-        SHA: sha,
-        SETUP: config.setup ?? '',
-        CHECK: config.check,
-        TIMEOUT: String(config.timeoutSeconds),
-      },
+      steps: [
+        { script: FETCH_SCRIPT, env: { GIT_TOKEN: token.secret, REMOTE: repo.remote, SHA: sha } },
+        { script: RUN_SCRIPT, env: { SETUP: config.setup ?? '', CHECK: config.check, TIMEOUT: String(config.timeoutSeconds) } },
+      ],
       timeoutSeconds: config.timeoutSeconds,
     });
     return checkRunFrom(outcome, config, startedAt, now());
