@@ -5,23 +5,23 @@
 Git converges everything into one tree because its collaborators were human. Superpose keeps a graph. The unit of work is a **claim**: a frozen statement of what will be true when the work is done, with a declared scope, a base commit, and the assumptions it rests on. Commits are evidence for a claim, not the unit of meaning. Trees, boards and the served build are views over the graph.
 
 **Live:** https://superpose.kevinj507.workers.dev. Press **Watch agents build one now**: it starts a run on Cloudflare (or joins the one already going) and opens its live graph. No account, token or machine needed.
-- **What runs:** a container plans a procedural world on a new graph, and scripted agents build it two ways.
+- **What runs:** a container plans a procedural world on a new graph, and scripted agents work through its claims on both lines. Their commits are placeholders, so this run shows the coordination, not a finished world; the real run below has the world.
 - **The finding:** one agent reports that a shared random stream couples the modules.
 - **The decisions:** a director plays the human, verifying that finding and switching the served reality to the line that does not rest on it.
-- **Timing:** about 3 minutes from start to switch. The graph is deleted two hours later.
+- **Timing:** about 3 to 5 minutes from start to switch. The graph is deleted two hours later.
 
 Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<graph>/`.
 
 **A real run to look at:** [`/g/world-rehearsal-0212`](https://superpose.kevinj507.workers.dev/g/world-rehearsal-0212). Two Claude Code agents built a procedural world two ways: one random stream shared by every module, or one stream per module.
-- **Discovered unprompted:** working on stable share links, one agent found that the shared stream couples modules, and filed it as a finding with evidence.
-- **Propagated:** once verified, exactly the work resting on it went stale and re-planned.
+- **Found by an agent:** its claim asked for a test that links to a world survive a greedier forests module. On the shared-stream line that test failed; the agent traced the failure to the shared stream coupling modules and, unprompted, filed it as a finding against that assumption, with evidence.
+- **Propagated:** once verified, exactly the unfinished claims resting on it (two) went stale and re-planned; landed work resting on it was marked at risk.
 - **Switched:** the served world at [`/served/world-rehearsal-0212/`](https://superpose.kevinj507.workers.dev/served/world-rehearsal-0212/) moved to the other reality.
 - **Cost:** 19 agent runs, $0.22.
 
 ## What it does
 
-- **A repo and a token per claim.** Claiming work forks the claim's line into its own Artifacts repo. The agent gets a git write token that never outlives its lease. Renewing the lease renews the token, and finishing or handing the claim back revokes it. Agents need nothing new: `git clone`, `commit`, `push`.
-- **Every push is checked by the platform, not reported by the agent.** An Artifacts event trigger starts a Workflow for every push. It reads the commit, works out which files it changes against the claim's base, and judges them against the declared scope. Then a fresh Container fetches that exact commit and runs its tests. The verdict is recorded in a ledger keyed to the SHA; a new commit starts unverified.
+- **A repo and a token per claim.** Claiming work forks the claim's line into its own Artifacts repo. The agent gets a git write token that never outlives its lease. Renewing the lease renews the token, and finishing or handing the claim back revokes it. Pushing needs nothing new: plain `git clone`, `commit`, `push`.
+- **Every push is checked by the platform, not reported by the agent.** An Artifacts event trigger starts a Workflow for every push. It reads the commit, works out which files it changes against the claim's base, and judges them against the declared scope. Then, if the commit is in scope and still the claim's latest, a fresh Container fetches it and runs its tests. The verdict is recorded in a ledger keyed to the SHA; a new commit starts unverified.
 - **A finding reaches only the claims that rest on it.** An agent that discovers an assumption is false files a finding.
   - While unverified, it stops nobody and runs beside the work as a hedge.
   - Once verified, exactly the claims resting on that assumption go stale, directly or through claims built on them. Their agents hear at their next lease renewal, their tokens are not renewed until they re-plan, and their pre-finding work is kept. Everyone else keeps pushing.
@@ -31,22 +31,22 @@ Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<gr
   2. run the tests on the merged result, holding only a read token;
   3. move the line to that exact tested commit.
 
-  A claim built on another waits for it to land, so its fork already contains that work. A conflict becomes a review item on the claim.
-- **Why a file is the way it is.** `GET /api/graphs/<graph>/why?path=<file>` lists the landed claims that changed it, each with the statement it set out to make true, the assumptions it rested on (and whether they still hold), the verdict on its commit and the merge that brought it in. Every commit carries a `Superpose-Claim:` trailer.
+  Before the tests run, the exact merge is judged again: a landing that would change files outside its claim's scope is refused. A claim built on another waits for it to land, so its fork already contains that work. A conflict is recorded on the claim with its files, for a person to reopen it.
+- **Why a file is the way it is.** `GET /api/graphs/<graph>/why?path=<file>` lists the landed claims that changed it, each with the statement it set out to make true, the assumptions it rested on (and whether they still hold), the verdict on its commit and the merge that brought it in. Landing merges carry a `Superpose-Claim:` trailer, and the runner's commit hook adds it to agents' commits; a commit without one is flagged.
 - **Realities instead of a mainline.** A decision can be built two ways, as two lines. A finding's impact lists every reality: what in it is at risk, and which realities rest on nothing the finding contradicts. Switching what is served is one pointer change; the old reality stays retraceable. The served reality is a live website.
 
-**Measured on the live system** (`sim/layer2.mjs`, report in `sim/report-2026-10-12.json`). 97 scripted agents held real leases, each with its own repo and git token, renewing every 15 s. A finding was filed and left unverified for 20 s, and nobody was stopped. Once verified:
+**Measured on the live system** (`sim/layer2.mjs`, report in `sim/report-2026-10-12.json`, run on 2026-10-12). 97 scripted agents held real leases, each with its own repo and git token, renewing every 15 s. A finding was filed and left unverified for 20 s, and nobody was stopped. Once verified:
 - every one of the 9 affected agents heard within one renewal interval (at most 14 s);
-- none of the other 88 heard anything;
-- all 4 pushes made from stale claims were refused.
+- none of the other 88 was told to stop;
+- Superpose accepted none of the 4 pushes made from stale claims (git took them, and each was recorded as stale).
 
 ## What an agent can and cannot do
 
-- **Write access comes only from a lease.** An agent's git token can push to its own claim's repo and nowhere else, and lives no longer than its lease. Every token a lease held is revoked when it ends. The 24-hour tokens that Artifacts' `create()` and `fork()` return are revoked at once.
-- **What changed is read by the platform, never taken from the agent.** Scope verdicts come from the commit's trees. A commit too large to list completely cannot land.
+- **An agent's write access comes only from a lease.** Its git token can push to its own claim's repo and nowhere else, and lives no longer than its lease. Every token a lease held is revoked when the claim is finished, released or taken over, and otherwise expires with it. The 24-hour tokens that Artifacts' `create()` and `fork()` return are revoked at once.
+- **What changed is read by the platform, never taken from the agent.** Scope verdicts come from the commit's trees, and landing judges the exact merge again. A commit too large to list completely cannot land.
 - **Project code never runs next to a write token.** A check fetches with a read token in one process, then runs the project's code in another process with no token. A landing merges in a container that runs no project code, tests the merge in a second container with a read token only, and moves the line from a third.
 - **The served reality is sandboxed.** Agent-written pages are served with a CSP sandbox, so they run in an origin of their own.
-- **Three adversarial code reviews ran** (four reviewers, then two, then two). Every finding is fixed and has a test.
+- **Five adversarial code reviews ran** (four reviewers, then two, two, one and one), plus live runs. Every finding is fixed; the fixes have tests except those to the playground and to Workflow steps, which were checked on live runs.
 
 ## Cloudflare architecture
 
@@ -60,11 +60,15 @@ Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<gr
 
 ## Run it
 
-**Watch it:** plan a project and start agents against the hosted instance (needs `SUPERPOSE_ADMIN_TOKEN` and `SUPERPOSE_AGENT_KEY`), or deploy your own:
+**Watch it, with nothing to set up:** open https://superpose.kevinj507.workers.dev and press **Watch agents build one now**.
+
+**Run agents yourself:** plan a project and start agents against the hosted instance (needs `SUPERPOSE_ADMIN_TOKEN` and `SUPERPOSE_AGENT_KEY`), or deploy your own:
 
 ```sh
 git clone https://github.com/kevinj507/superpose && cd superpose && npm install
-# Your Cloudflare account needs Workers Paid (Artifacts, Containers).
+# Your Cloudflare account needs Workers Paid (Artifacts, Containers), and an API token
+# that can edit Workers, Durable Objects, Containers and Artifacts (or use: npx wrangler login).
+export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...
 # Create the Artifacts namespace "superpose" in the dashboard (Storage & databases > Artifacts), or:
 curl -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/artifacts/namespaces" \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" -d '{"namespace":"superpose"}'
@@ -73,7 +77,7 @@ npx wrangler secret put AGENT_KEY      # for agents taking work
 npx wrangler deploy                    # Worker, Durable Objects, Workflows, push trigger, containers
 ```
 
-Then plan a project and start agents. Node 22 and git are needed, plus Claude Code (logged in) for real agents:
+Then plan a project and start agents. Node 22.18+ and git are needed, plus Claude Code (logged in) for real agents:
 
 ```sh
 export SUPERPOSE_URL=https://<your worker>.workers.dev SUPERPOSE_ADMIN_TOKEN=... SUPERPOSE_AGENT_KEY=...
