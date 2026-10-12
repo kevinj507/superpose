@@ -233,8 +233,14 @@ export class Graph extends DurableObject<Env> {
     if (current && Date.now() - current.at < 8 * 60_000) return { graph: current.graph, started: false };
     if (!this.env.PLAYS) throw new Error('no playground Workflow bound');
     const graph = `play-${Date.now().toString(36)}`;
-    await this.env.PLAYS.create({ params: { graph, url } });
+    // Taken before awaiting, so two visitors arriving together start one run.
     kv.put('play', { graph, at: Date.now() });
+    try {
+      await this.env.PLAYS.create({ params: { graph, url } });
+    } catch (err) {
+      kv.put('play', current ?? { graph: '', at: 0 });
+      throw err;
+    }
     return { graph, started: true };
   }
 
