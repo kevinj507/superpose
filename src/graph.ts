@@ -81,6 +81,10 @@ export class Graph extends DurableObject<Env> {
     return this.runWithRepos(graph, (c) => c.renew(id, token));
   }
 
+  declareAssumption(id: string, token: string, input: { statement?: string; assumption?: string }) {
+    return this.run((e) => e.declareAssumption(id, token, input));
+  }
+
   release(graph: string, id: string, token: string) {
     return this.runWithRepos(graph, (c) => c.release(id, token));
   }

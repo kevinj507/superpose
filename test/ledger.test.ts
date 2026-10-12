@@ -51,3 +51,19 @@ describe('the verdict ledger: one verdict per exact commit', () => {
     ]);
   });
 });
+
+describe('assumptions declared by agents', () => {
+  it('the same statement from two agents is one node, so one finding reaches both', () => {
+    const clock = { t: 1_000_000, now() { return this.t; } };
+    let n = 0;
+    const engine = new Engine(new MemoryStore(), clock, { leaseMs: 60_000, hedgeMs: 300_000, newToken: () => `tok${++n}` });
+    const [x, y, z] = ['x', 'y', 'z'].map((s) => engine.addClaim({ statement: s, scope: [`${s}/**`] }));
+    const [tx, ty, tz] = [x!, y!, z!].map((c) => engine.claim(c.id, `agent-${c.id}`).token);
+    const a1 = engine.declareAssumption(x!.id, tx!, { statement: 'KV reads are strongly consistent' });
+    const a2 = engine.declareAssumption(y!.id, ty!, { statement: 'kv reads are strongly consistent.' });
+    expect(a2.id).toBe(a1.id);
+    const { finding } = engine.fileFinding(z!.id, tz!, { statement: 'KV is eventually consistent', effect: 'contradicts', targets: [a1.id] });
+    expect(engine.verifyFinding(finding.id).affected.sort()).toEqual([x!.id, y!.id].sort());
+    expect(() => engine.declareAssumption(z!.id, tz!, { assumption: a1.id })).toThrow(/contradicted/);
+  });
+});

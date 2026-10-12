@@ -114,6 +114,27 @@ export class Engine {
     return c;
   }
 
+  // An agent declares what its work rests on, at claim time or later. The same
+  // statement declared by several agents is one assumption node, so a finding
+  // against it reaches all of them.
+  declareAssumption(id: string, token: string, input: { statement?: string; assumption?: string }): Assumption {
+    this.held(id, token);
+    let a: Assumption | undefined;
+    if (input.assumption) a = this.assumption(input.assumption);
+    else {
+      const statement = (input.statement ?? '').trim();
+      if (!statement) throw new EngineError('bad_request', 'an assumption needs a statement');
+      const key = normalise(statement);
+      a = this.store
+        .allNodes()
+        .find((n): n is Assumption => n.kind === 'assumption' && n.status === 'holding' && normalise(n.statement) === key);
+      a ??= this.addAssumption(statement);
+    }
+    if (a.status !== 'holding') throw new EngineError('contradicted', `assumption ${a.id} is contradicted`);
+    this.store.addEdge({ source: a.id, target: id, purpose: 'required for' });
+    return a;
+  }
+
   isReady(id: string): boolean {
     const c = this.claimNode(id);
     if (c.status !== 'open') return false;
@@ -529,9 +550,12 @@ export class Engine {
   }
 }
 
+function normalise(statement: string): string {
+  return statement.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 function fingerprintOf(statement: string, effect: string, targets: string[]): string {
-  const norm = statement.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  return `${effect}|${[...targets].sort().join(',')}|${norm}`;
+  return `${effect}|${[...targets].sort().join(',')}|${normalise(statement)}`;
 }
 
 function pushResult(row: PushRecord): PushResult {

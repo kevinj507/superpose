@@ -19,6 +19,7 @@ const STATUS: Record<string, number> = {
   contradicted: 409,
   not_done: 409,
   repo_unavailable: 503,
+  bad_request: 400,
   unknown_commit: 404,
   no_repo: 409,
 };
@@ -81,6 +82,9 @@ route('POST', '/api/graphs/:gid/claims/:id/claim', 'agent', ({ graph, params, bo
 
 route('POST', '/api/graphs/:gid/claims/:id/renew', 'lease', ({ graph, params, bearer }) => graph.renew(params.gid!, params.id!, bearer));
 route('POST', '/api/graphs/:gid/claims/:id/release', 'lease', ({ graph, params, bearer }) => graph.release(params.gid!, params.id!, bearer));
+route('POST', '/api/graphs/:gid/claims/:id/assumptions', 'lease', ({ graph, params, body, bearer }) =>
+  graph.declareAssumption(params.id!, bearer, { statement: str(body.statement) || undefined, assumption: str(body.assumption) || undefined }),
+);
 // "I pushed this commit": the platform reads the commit from the claim's repo
 // and records the verdict. Push events reach the same check without this.
 route('POST', '/api/graphs/:gid/claims/:id/push', 'lease', async ({ graph, params, body, bearer }) => {
