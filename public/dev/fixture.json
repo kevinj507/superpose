@@ -1,0 +1,1355 @@
+{
+ "now": 1791817200000,
+ "leaseMs": 600000,
+ "nodes": [
+  {
+   "id": "a1",
+   "kind": "assumption",
+   "statement": "The date library handles time zones correctly",
+   "status": "contradicted"
+  },
+  {
+   "id": "a2",
+   "kind": "assumption",
+   "statement": "Every request is authenticated upstream at the gateway",
+   "status": "holding"
+  },
+  {
+   "id": "a3",
+   "kind": "assumption",
+   "statement": "The payment provider's v2 API stays available",
+   "status": "holding"
+  },
+  {
+   "id": "a4",
+   "kind": "assumption",
+   "statement": "Postgres is the only datastore",
+   "status": "holding"
+  },
+  {
+   "id": "a5",
+   "kind": "assumption",
+   "statement": "Dates are stored as UTC instants and converted to local time only at the edge",
+   "status": "holding"
+  },
+  {
+   "id": "c1",
+   "kind": "claim",
+   "cluster": "billing",
+   "line": "main",
+   "statement": "Parse ISO-8601 dates in the invoice importer",
+   "scope": [
+    "src/import/dates.ts",
+    "src/import/dates.test.ts"
+   ],
+   "status": "stale",
+   "pushes": 1,
+   "kept": [
+    {
+     "sha": "cfe66410ee89ddff8df0776be9bf6e644604d440",
+     "reason": "finding f1 verified",
+     "at": 1791816720000
+    }
+   ],
+   "version": 1,
+   "lease": {
+    "holder": "ada",
+    "token": "",
+    "expiresAt": 1791817392000,
+    "cursor": 12,
+    "git": {
+     "tokenId": "tok-ada",
+     "expiresAt": 1791817391500
+    }
+   },
+   "headSha": "cfe66410ee89ddff8df0776be9bf6e644604d440",
+   "repo": {
+    "name": "demo.claim.c1",
+    "remote": "https://artifacts.example/superpose/demo.claim.c1.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c2",
+   "kind": "claim",
+   "cluster": "web",
+   "line": "main",
+   "statement": "Show due dates in each customer's own time zone",
+   "scope": [
+    "web/src/invoices/DueDate.tsx"
+   ],
+   "status": "stale",
+   "pushes": 1,
+   "kept": [
+    {
+     "sha": "412a7c68055a05b75d43d4628ac8816dec63a6fe",
+     "reason": "finding f1 verified",
+     "at": 1791816720000
+    }
+   ],
+   "version": 1,
+   "lease": {
+    "holder": "basil",
+    "token": "",
+    "expiresAt": 1791817464000,
+    "cursor": 2,
+    "git": {
+     "tokenId": "tok-basil",
+     "expiresAt": 1791817463500
+    }
+   },
+   "headSha": "412a7c68055a05b75d43d4628ac8816dec63a6fe",
+   "repo": {
+    "name": "demo.claim.c2",
+    "remote": "https://artifacts.example/superpose/demo.claim.c2.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c3",
+   "kind": "claim",
+   "cluster": "billing",
+   "line": "main",
+   "statement": "Import invoices from accounting CSV exports",
+   "scope": [
+    "src/import/csv/**"
+   ],
+   "status": "stale",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "cora",
+    "token": "",
+    "expiresAt": 1791817566000,
+    "cursor": 1,
+    "git": {
+     "tokenId": "tok-cora",
+     "expiresAt": 1791817565500
+    }
+   },
+   "headSha": "6b9c29dfa28613d0844ada985a51751509ed0462",
+   "repo": {
+    "name": "demo.claim.c3",
+    "remote": "https://artifacts.example/superpose/demo.claim.c3.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c4",
+   "kind": "claim",
+   "cluster": "billing",
+   "line": "main",
+   "statement": "Send dunning reminders at 9am local time",
+   "scope": [
+    "src/dunning/**"
+   ],
+   "status": "claimed",
+   "pushes": 2,
+   "kept": [
+    {
+     "sha": "3bf8fbf7691a5f9de7faf5a5bd3ba9d2b9845d7f",
+     "reason": "finding f1 verified",
+     "at": 1791816720000
+    }
+   ],
+   "version": 2,
+   "lease": {
+    "holder": "dex",
+    "token": "",
+    "expiresAt": 1791817650000,
+    "cursor": 30,
+    "git": {
+     "tokenId": "tok-dex",
+     "expiresAt": 1791817649500
+    }
+   },
+   "headSha": "6b22b33e3f3ddf078b35c51a8fdf40413a0e4b40",
+   "repo": {
+    "name": "demo.claim.c4",
+    "remote": "https://artifacts.example/superpose/demo.claim.c4.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c5",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Read the user id from the gateway's signed header",
+   "scope": [
+    "src/auth/**"
+   ],
+   "status": "claimed",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "elio",
+    "token": "",
+    "expiresAt": 1791817356000,
+    "cursor": 30,
+    "git": {
+     "tokenId": "tok-elio",
+     "expiresAt": 1791817355500
+    }
+   },
+   "headSha": "4dc17fd9236c0bc34ffca24184a0dbf05a4a68e9",
+   "repo": {
+    "name": "demo.claim.c5",
+    "remote": "https://artifacts.example/superpose/demo.claim.c5.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c6",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Scope every invoice query to the caller's workspace",
+   "scope": [
+    "src/db/scoping.ts",
+    "src/db/scoping.test.ts"
+   ],
+   "status": "claimed",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "fern",
+    "token": "",
+    "expiresAt": 1791817215000,
+    "cursor": 30,
+    "git": {
+     "tokenId": "tok-fern",
+     "expiresAt": 1791817214500
+    }
+   },
+   "headSha": "5c9bf08cee6423e815b54f901cd42b5b6c976759",
+   "repo": {
+    "name": "demo.claim.c6",
+    "remote": "https://artifacts.example/superpose/demo.claim.c6.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c7",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Rate-limit the public API per workspace",
+   "scope": [
+    "src/api/ratelimit.ts"
+   ],
+   "status": "done",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "headSha": "a09406fb78bb62e88dbb2de910945396be300261",
+   "finishedAt": 1791817164000,
+   "landing": {
+    "status": "landing",
+    "at": 1791817182000
+   },
+   "repo": {
+    "name": "demo.claim.c7",
+    "remote": "https://artifacts.example/superpose/demo.claim.c7.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c8",
+   "kind": "claim",
+   "cluster": "payments",
+   "line": "main",
+   "statement": "Charge saved cards on the due date",
+   "scope": [
+    "src/payments/charge.ts"
+   ],
+   "status": "landed",
+   "pushes": 3,
+   "kept": [],
+   "version": 1,
+   "finishedAt": 1791815400000,
+   "landedSha": "bef0b03fe5f03a7c8c64481eaf45881edfee6585",
+   "repo": {
+    "name": "demo.claim.c8",
+    "remote": "https://artifacts.example/superpose/demo.claim.c8.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c9",
+   "kind": "claim",
+   "cluster": "payments",
+   "line": "main",
+   "statement": "Refunds through the payment provider",
+   "scope": [
+    "src/payments/refunds.ts"
+   ],
+   "status": "claimed",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "gus",
+    "token": "",
+    "expiresAt": 1791817512000,
+    "cursor": 30,
+    "git": {
+     "tokenId": "tok-gus",
+     "expiresAt": 1791817511500
+    }
+   },
+   "headSha": "53814877c3df96f107ba22ecc85ea7b9afb92702",
+   "repo": {
+    "name": "demo.claim.c9",
+    "remote": "https://artifacts.example/superpose/demo.claim.c9.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c10",
+   "kind": "claim",
+   "cluster": "payments",
+   "line": "main",
+   "statement": "Handle the provider's payment webhooks",
+   "scope": [
+    "src/payments/webhooks/**"
+   ],
+   "status": "claimed",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "hana",
+    "token": "",
+    "expiresAt": 1791817728000,
+    "cursor": 30,
+    "git": {
+     "tokenId": "tok-hana",
+     "expiresAt": 1791817727500
+    }
+   },
+   "headSha": "15fe0869f6d04a283a4e20430c61368705e77979",
+   "repo": {
+    "name": "demo.claim.c10",
+    "remote": "https://artifacts.example/superpose/demo.claim.c10.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c11",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Full-text search over invoices",
+   "scope": [
+    "src/search/**"
+   ],
+   "status": "stale",
+   "pushes": 0,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "iris",
+    "token": "",
+    "expiresAt": 1791817110000,
+    "cursor": 9,
+    "git": {
+     "tokenId": "tok-iris",
+     "expiresAt": 1791817109500
+    }
+   },
+   "repo": {
+    "name": "demo.claim.c11",
+    "remote": "https://artifacts.example/superpose/demo.claim.c11.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c12",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Nightly database backups",
+   "scope": [
+    "ops/backup/**"
+   ],
+   "status": "open",
+   "pushes": 0,
+   "kept": [],
+   "version": 1,
+   "repo": {
+    "name": "demo.claim.c12",
+    "remote": "https://artifacts.example/superpose/demo.claim.c12.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c13",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Migrations for invoices and line items",
+   "scope": [
+    "db/migrations/**"
+   ],
+   "status": "landed",
+   "pushes": 2,
+   "kept": [],
+   "version": 1,
+   "finishedAt": 1791814800000,
+   "landedSha": "ef3bbe7de0591a697608c8357c23ca62df4bcdbe",
+   "repo": {
+    "name": "demo.claim.c13",
+    "remote": "https://artifacts.example/superpose/demo.claim.c13.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c14",
+   "kind": "claim",
+   "cluster": "reporting",
+   "line": "main",
+   "statement": "Bucket revenue by calendar month in local time",
+   "scope": [
+    "src/reports/monthly.ts"
+   ],
+   "status": "superseded",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "repo": {
+    "name": "demo.claim.c14",
+    "remote": "https://artifacts.example/superpose/demo.claim.c14.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c15",
+   "kind": "claim",
+   "cluster": "reporting",
+   "line": "tz-utc",
+   "statement": "Bucket revenue by calendar month in UTC",
+   "scope": [
+    "src/reports/monthly.ts",
+    "src/reports/monthly.test.ts"
+   ],
+   "status": "claimed",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "jude",
+    "token": "",
+    "expiresAt": 1791817764000,
+    "cursor": 30,
+    "git": {
+     "tokenId": "tok-jude",
+     "expiresAt": 1791817763500
+    }
+   },
+   "headSha": "0e835dfc72d512ca72c0268474bb4edec6656a58",
+   "repo": {
+    "name": "demo.claim.c15",
+    "remote": "https://artifacts.example/superpose/demo.claim.c15.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c16",
+   "kind": "claim",
+   "cluster": "web",
+   "line": "main",
+   "statement": "Monthly revenue chart on the dashboard",
+   "scope": [
+    "web/src/dashboard/Revenue*.tsx"
+   ],
+   "status": "landed",
+   "pushes": 2,
+   "kept": [],
+   "version": 1,
+   "finishedAt": 1791815700000,
+   "landedSha": "2132a4dd58fda946585749bfc7f94a13656dcac3",
+   "repo": {
+    "name": "demo.claim.c16",
+    "remote": "https://artifacts.example/superpose/demo.claim.c16.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c20",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Per-workspace API keys",
+   "scope": [
+    "src/api/keys.ts",
+    "src/api/routes.ts"
+   ],
+   "status": "done",
+   "pushes": 2,
+   "kept": [],
+   "version": 1,
+   "headSha": "71394159ffbdc5ad35e0ce3456fa20d5112f2c39",
+   "finishedAt": 1791816960000,
+   "landing": {
+    "status": "conflict",
+    "at": 1791816990000,
+    "files": [
+     "src/api/routes.ts"
+    ],
+    "log": "Auto-merging src/api/routes.ts\nCONFLICT (content): Merge conflict in src/api/routes.ts\nAutomatic merge failed; fix conflicts and then commit the result."
+   },
+   "repo": {
+    "name": "demo.claim.c20",
+    "remote": "https://artifacts.example/superpose/demo.claim.c20.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c17",
+   "kind": "claim",
+   "cluster": "platform",
+   "line": "main",
+   "statement": "Write the onboarding guide for new agents",
+   "scope": [
+    "docs/onboarding.md"
+   ],
+   "status": "open",
+   "pushes": 0,
+   "kept": [],
+   "version": 1,
+   "repo": {
+    "name": "demo.claim.c17",
+    "remote": "https://artifacts.example/superpose/demo.claim.c17.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c18",
+   "kind": "claim",
+   "cluster": "billing",
+   "line": "main",
+   "statement": "Accrue late fees daily after the due date",
+   "scope": [
+    "src/fees/late.ts"
+   ],
+   "status": "open",
+   "pushes": 0,
+   "kept": [],
+   "version": 1,
+   "repo": {
+    "name": "demo.claim.c18",
+    "remote": "https://artifacts.example/superpose/demo.claim.c18.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "c19",
+   "kind": "claim",
+   "cluster": "web",
+   "line": "main",
+   "statement": "Payment status badge on every invoice",
+   "scope": [
+    "web/src/invoices/PaymentBadge.tsx"
+   ],
+   "status": "claimed",
+   "pushes": 1,
+   "kept": [],
+   "version": 1,
+   "lease": {
+    "holder": "kai",
+    "token": "",
+    "expiresAt": 1791817434000,
+    "cursor": 30,
+    "git": {
+     "tokenId": "tok-kai",
+     "expiresAt": 1791817433500
+    }
+   },
+   "headSha": "d3a5e606b3729a5e13b57e4d1a79a7c8b7958b03",
+   "repo": {
+    "name": "demo.claim.c19",
+    "remote": "https://artifacts.example/superpose/demo.claim.c19.git"
+   },
+   "baseSha": "bf51095108da09af1f89201cdc1215f331f0f8d2"
+  },
+  {
+   "id": "f1",
+   "kind": "finding",
+   "statement": "The date library drops the UTC offset when it parses ISO dates across a DST change",
+   "effect": "contradicts",
+   "status": "verified",
+   "finder": "c10",
+   "targets": [
+    "a1"
+   ],
+   "fingerprint": "contradicts|a1|the date library drops the utc offset when it parses iso dates across a dst change",
+   "hedgeUntil": 1791817140000
+  },
+  {
+   "id": "f2",
+   "kind": "finding",
+   "statement": "The provider retires its v2 API in March; v3 changes how refunds settle",
+   "effect": "contradicts",
+   "status": "unverified",
+   "finder": "c9",
+   "targets": [
+    "a3"
+   ],
+   "fingerprint": "contradicts|a3|the provider retires its v2 api in march; v3 changes how refunds settle",
+   "hedgeUntil": 1791818460000
+  },
+  {
+   "id": "f3",
+   "kind": "finding",
+   "statement": "Postgres full-text search can't rank results by recency",
+   "effect": "contradicts",
+   "status": "refuted",
+   "finder": "c11",
+   "targets": [
+    "a4"
+   ],
+   "fingerprint": "contradicts|a4|postgres full-text search can't rank results by recency",
+   "hedgeUntil": 1791817080000
+  },
+  {
+   "id": "f4",
+   "kind": "finding",
+   "statement": "A shared money-formatting helper already exists in src/lib/money.ts",
+   "effect": "helps",
+   "status": "verified",
+   "finder": "c5",
+   "targets": [
+    "c19"
+   ],
+   "fingerprint": "helps|c19|a shared money-formatting helper already exists in src/lib/money.ts",
+   "hedgeUntil": 1791816600000
+  }
+ ],
+ "edges": [
+  {
+   "source": "a1",
+   "target": "c1",
+   "purpose": "required for"
+  },
+  {
+   "source": "a1",
+   "target": "c2",
+   "purpose": "required for"
+  },
+  {
+   "source": "c1",
+   "target": "c3",
+   "purpose": "required for"
+  },
+  {
+   "source": "a5",
+   "target": "c4",
+   "purpose": "required for"
+  },
+  {
+   "source": "a2",
+   "target": "c5",
+   "purpose": "required for"
+  },
+  {
+   "source": "a2",
+   "target": "c6",
+   "purpose": "required for"
+  },
+  {
+   "source": "a2",
+   "target": "c7",
+   "purpose": "required for"
+  },
+  {
+   "source": "a3",
+   "target": "c8",
+   "purpose": "required for"
+  },
+  {
+   "source": "a3",
+   "target": "c9",
+   "purpose": "required for"
+  },
+  {
+   "source": "a3",
+   "target": "c10",
+   "purpose": "required for"
+  },
+  {
+   "source": "a4",
+   "target": "c11",
+   "purpose": "required for"
+  },
+  {
+   "source": "a4",
+   "target": "c12",
+   "purpose": "required for"
+  },
+  {
+   "source": "a4",
+   "target": "c13",
+   "purpose": "required for"
+  },
+  {
+   "source": "a1",
+   "target": "c14",
+   "purpose": "required for"
+  },
+  {
+   "source": "a5",
+   "target": "c15",
+   "purpose": "required for"
+  },
+  {
+   "source": "c15",
+   "target": "c14",
+   "purpose": "supersedes"
+  },
+  {
+   "source": "a1",
+   "target": "c16",
+   "purpose": "required for"
+  },
+  {
+   "source": "c4",
+   "target": "c18",
+   "purpose": "required for"
+  },
+  {
+   "source": "a2",
+   "target": "c18",
+   "purpose": "required for"
+  },
+  {
+   "source": "a2",
+   "target": "c20",
+   "purpose": "required for"
+  },
+  {
+   "source": "a3",
+   "target": "c19",
+   "purpose": "required for"
+  },
+  {
+   "source": "f1",
+   "target": "a1",
+   "purpose": "contradicts"
+  },
+  {
+   "source": "f2",
+   "target": "a3",
+   "purpose": "contradicts"
+  },
+  {
+   "source": "f3",
+   "target": "a4",
+   "purpose": "contradicts"
+  },
+  {
+   "source": "f4",
+   "target": "c19",
+   "purpose": "supports"
+  }
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "at": 1791814800000,
+   "type": "claim.landed",
+   "claims": [
+    "c13"
+   ],
+   "data": {
+    "line": "main",
+    "merge": "ef3bbe7de0591a697608c8357c23ca62df4bcdbe"
+   }
+  },
+  {
+   "seq": 2,
+   "at": 1791815400000,
+   "type": "claim.landed",
+   "claims": [
+    "c8"
+   ],
+   "data": {
+    "line": "main",
+    "merge": "bef0b03fe5f03a7c8c64481eaf45881edfee6585"
+   }
+  },
+  {
+   "seq": 3,
+   "at": 1791815700000,
+   "type": "claim.landed",
+   "claims": [
+    "c16"
+   ],
+   "data": {
+    "line": "main",
+    "merge": "2132a4dd58fda946585749bfc7f94a13656dcac3"
+   }
+  },
+  {
+   "seq": 4,
+   "at": 1791816480000,
+   "type": "reality.served",
+   "claims": [],
+   "data": {
+    "line": "main",
+    "previous": "tz-utc"
+   }
+  },
+  {
+   "seq": 5,
+   "at": 1791816660000,
+   "type": "finding.filed",
+   "claims": [
+    "c10"
+   ],
+   "data": {
+    "finding": "f1"
+   }
+  },
+  {
+   "seq": 6,
+   "at": 1791816720000,
+   "type": "finding.verified",
+   "claims": [
+    "c10"
+   ],
+   "data": {
+    "finding": "f1"
+   }
+  },
+  {
+   "seq": 7,
+   "at": 1791816720000,
+   "type": "claim.stale",
+   "claims": [
+    "c1"
+   ],
+   "data": {
+    "finding": "f1",
+    "statement": "The date library drops the UTC offset when it parses ISO dates across a DST change",
+    "assumptions": [
+     "a1"
+    ]
+   }
+  },
+  {
+   "seq": 8,
+   "at": 1791816720000,
+   "type": "claim.stale",
+   "claims": [
+    "c2"
+   ],
+   "data": {
+    "finding": "f1",
+    "statement": "The date library drops the UTC offset when it parses ISO dates across a DST change",
+    "assumptions": [
+     "a1"
+    ]
+   }
+  },
+  {
+   "seq": 9,
+   "at": 1791816720000,
+   "type": "claim.stale",
+   "claims": [
+    "c3"
+   ],
+   "data": {
+    "finding": "f1",
+    "statement": "The date library drops the UTC offset when it parses ISO dates across a DST change",
+    "assumptions": [
+     "a1"
+    ]
+   }
+  },
+  {
+   "seq": 10,
+   "at": 1791816720000,
+   "type": "claim.stale",
+   "claims": [
+    "c4"
+   ],
+   "data": {
+    "finding": "f1",
+    "statement": "The date library drops the UTC offset when it parses ISO dates across a DST change",
+    "assumptions": [
+     "a1"
+    ]
+   }
+  },
+  {
+   "seq": 11,
+   "at": 1791816720000,
+   "type": "reality.at_risk",
+   "claims": [
+    "c16"
+   ],
+   "data": {
+    "finding": "f1",
+    "assumptions": [
+     "a1"
+    ]
+   }
+  },
+  {
+   "seq": 12,
+   "at": 1791816750000,
+   "type": "finding.filed",
+   "claims": [
+    "c11"
+   ],
+   "data": {
+    "finding": "f3"
+   }
+  },
+  {
+   "seq": 13,
+   "at": 1791816810000,
+   "type": "finding.refuted",
+   "claims": [
+    "c11"
+   ],
+   "data": {
+    "finding": "f3"
+   }
+  },
+  {
+   "seq": 14,
+   "at": 1791816870000,
+   "type": "claim.replanned",
+   "claims": [
+    "c4"
+   ],
+   "data": {
+    "version": 2
+   }
+  },
+  {
+   "seq": 15,
+   "at": 1791816900000,
+   "type": "finding.filed",
+   "claims": [
+    "c5"
+   ],
+   "data": {
+    "finding": "f4"
+   }
+  },
+  {
+   "seq": 16,
+   "at": 1791816930000,
+   "type": "finding.verified",
+   "claims": [
+    "c5"
+   ],
+   "data": {
+    "finding": "f4"
+   }
+  },
+  {
+   "seq": 17,
+   "at": 1791816930000,
+   "type": "claim.helped",
+   "claims": [
+    "c19"
+   ],
+   "data": {
+    "finding": "f4",
+    "statement": "A shared money-formatting helper already exists in src/lib/money.ts"
+   }
+  },
+  {
+   "seq": 18,
+   "at": 1791816990000,
+   "type": "claim.landing_failed",
+   "claims": [
+    "c20"
+   ],
+   "data": {
+    "status": "conflict",
+    "files": [
+     "src/api/routes.ts"
+    ]
+   }
+  },
+  {
+   "seq": 19,
+   "at": 1791817020000,
+   "type": "scope.touched",
+   "claims": [
+    "c6"
+   ],
+   "data": {
+    "by": "c5",
+    "sha": "4dc17fd9236c0bc34ffca24184a0dbf05a4a68e9",
+    "paths": [
+     "src/db/scoping.ts"
+    ]
+   }
+  },
+  {
+   "seq": 20,
+   "at": 1791817080000,
+   "type": "claim.checked",
+   "claims": [
+    "c6"
+   ],
+   "data": {
+    "sha": "5c9bf08cee6423e815b54f901cd42b5b6c976759",
+    "verdict": "checks-failed",
+    "exitCode": 1
+   }
+  },
+  {
+   "seq": 21,
+   "at": 1791817110000,
+   "type": "finding.filed",
+   "claims": [
+    "c9"
+   ],
+   "data": {
+    "finding": "f2"
+   }
+  },
+  {
+   "seq": 22,
+   "at": 1791817140000,
+   "type": "claim.checked",
+   "claims": [
+    "c4"
+   ],
+   "data": {
+    "sha": "6b22b33e3f3ddf078b35c51a8fdf40413a0e4b40",
+    "verdict": "checks-passed",
+    "exitCode": 0
+   }
+  }
+ ],
+ "pushes": [
+  {
+   "claim": "c1",
+   "sha": "cfe66410ee89ddff8df0776be9bf6e644604d440",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816480000,
+   "paths": [
+    "src/import/dates.test.ts",
+    "src/import/dates.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-passed",
+   "checks": {
+    "status": "passed",
+    "command": "npm test",
+    "exitCode": 0,
+    "finishedAt": 1791816533000,
+    "startedAt": 1791816492000
+   }
+  },
+  {
+   "claim": "c2",
+   "sha": "412a7c68055a05b75d43d4628ac8816dec63a6fe",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816600000,
+   "paths": [
+    "web/src/invoices/DueDate.tsx"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "unverified"
+  },
+  {
+   "claim": "c3",
+   "sha": "6b9c29dfa28613d0844ada985a51751509ed0462",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791817170000,
+   "paths": [
+    "src/import/csv/parse.ts",
+    "src/import/csv/rows.ts",
+    "src/import/csv/rows.test.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "unverified",
+   "checks": {
+    "status": "running",
+    "command": "npm test",
+    "startedAt": 1791817176000
+   }
+  },
+  {
+   "claim": "c4",
+   "sha": "3bf8fbf7691a5f9de7faf5a5bd3ba9d2b9845d7f",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816300000,
+   "paths": [
+    "src/dunning/schedule.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-passed",
+   "checks": {
+    "status": "passed",
+    "command": "npm test",
+    "exitCode": 0,
+    "finishedAt": 1791816364000,
+    "startedAt": 1791816312000
+   }
+  },
+  {
+   "claim": "c4",
+   "sha": "47e0090e4ddbffe7edcc02037f7f7636f671662d",
+   "ref": "refs/heads/main",
+   "before": "3bf8fbf7691a5f9de7faf5a5bd3ba9d2b9845d7f",
+   "at": 1791816780000,
+   "paths": [
+    "src/dunning/schedule.ts",
+    "src/dunning/tz.ts"
+   ],
+   "outside": [],
+   "accepted": false,
+   "reason": "stale",
+   "verdict": "unverified"
+  },
+  {
+   "claim": "c4",
+   "sha": "6b22b33e3f3ddf078b35c51a8fdf40413a0e4b40",
+   "ref": "refs/heads/main",
+   "before": "3bf8fbf7691a5f9de7faf5a5bd3ba9d2b9845d7f",
+   "at": 1791817122000,
+   "paths": [
+    "src/dunning/schedule.ts",
+    "src/dunning/utc.ts",
+    "src/dunning/utc.test.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-passed",
+   "checks": {
+    "status": "passed",
+    "command": "npm test",
+    "exitCode": 0,
+    "finishedAt": 1791817143000,
+    "log": " + src/dunning/utc.test.ts (7 tests) 64ms\n\n Test Files  1 passed (1)\n      Tests  7 passed (7)",
+    "startedAt": 1791817125000
+   }
+  },
+  {
+   "claim": "c5",
+   "sha": "4dc17fd9236c0bc34ffca24184a0dbf05a4a68e9",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791817020000,
+   "paths": [
+    "package.json",
+    "src/auth/header.test.ts",
+    "src/auth/header.ts",
+    "src/db/scoping.ts"
+   ],
+   "outside": [
+    "package.json",
+    "src/db/scoping.ts"
+   ],
+   "accepted": true,
+   "verdict": "scope-violation",
+   "unattributed": [
+    "dde1936dcdad626590896acd32b5a81761a63313"
+   ]
+  },
+  {
+   "claim": "c6",
+   "sha": "5c9bf08cee6423e815b54f901cd42b5b6c976759",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791817056000,
+   "paths": [
+    "src/db/scoping.test.ts",
+    "src/db/scoping.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-failed",
+   "checks": {
+    "status": "failed",
+    "command": "npm test -- src/db",
+    "exitCode": 1,
+    "finishedAt": 1791817081000,
+    "log": "> ledgerline@0.1.0 test\n> vitest run src/db\n\n + src/db/connection.test.ts (4 tests) 38ms\n > src/db/scoping.test.ts (6 tests | 1 failed) 112ms\n   x scopes invoice queries to the caller's workspace > rejects a query without a workspace id\n     -> expected [Function] to throw an error\n\n FAIL  src/db/scoping.test.ts > scopes invoice queries > rejects a query without a workspace id\nAssertionError: expected [Function] to throw an error\n > src/db/scoping.test.ts:41:37\n     39|   it('rejects a query without a workspace id', () => {\n     40|     const q = invoices.where({ status: 'open' });\n     41|     expect(() => scoped(q, undefined)).toThrow();\n       |                                     ^\n     42|   });\n\n Test Files  1 failed | 1 passed (2)\n      Tests  1 failed | 9 passed (10)\n   Duration  1.31s",
+    "startedAt": 1791817062000
+   }
+  },
+  {
+   "claim": "c7",
+   "sha": "a09406fb78bb62e88dbb2de910945396be300261",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816000000,
+   "paths": [
+    "src/api/ratelimit.test.ts",
+    "src/api/ratelimit.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-passed",
+   "checks": {
+    "status": "passed",
+    "command": "npm test",
+    "exitCode": 0,
+    "finishedAt": 1791816045000,
+    "startedAt": 1791816012000
+   }
+  },
+  {
+   "claim": "c9",
+   "sha": "53814877c3df96f107ba22ecc85ea7b9afb92702",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816960000,
+   "paths": [
+    "src/payments/refunds.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "verifier-failed",
+   "checks": {
+    "status": "error",
+    "command": "npm test",
+    "exitCode": 137,
+    "finishedAt": 1791817086000,
+    "log": "runner: container killed after 120s (out of memory)\nno test results were reported",
+    "startedAt": 1791816966000
+   }
+  },
+  {
+   "claim": "c10",
+   "sha": "15fe0869f6d04a283a4e20430c61368705e77979",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816840000,
+   "paths": [
+    "src/payments/webhooks/handler.ts",
+    "src/payments/webhooks/verify.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "budget-exhausted",
+   "checks": {
+    "status": "timeout",
+    "command": "npm test",
+    "exitCode": 1,
+    "finishedAt": 1791817146000,
+    "log": "checks overran their 300s timebox; stopped",
+    "startedAt": 1791816846000
+   }
+  },
+  {
+   "claim": "c20",
+   "sha": "71394159ffbdc5ad35e0ce3456fa20d5112f2c39",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791816948000,
+   "paths": [
+    "src/api/keys.ts",
+    "src/api/routes.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-passed",
+   "checks": {
+    "status": "passed",
+    "command": "npm test",
+    "exitCode": 0,
+    "finishedAt": 1791816976000,
+    "startedAt": 1791816954000
+   }
+  },
+  {
+   "claim": "c15",
+   "sha": "0e835dfc72d512ca72c0268474bb4edec6656a58",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791817080000,
+   "paths": [
+    "src/reports/monthly.test.ts",
+    "src/reports/monthly.ts"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "checks-passed",
+   "checks": {
+    "status": "passed",
+    "command": "npm test",
+    "exitCode": 0,
+    "finishedAt": 1791817113000,
+    "startedAt": 1791817086000
+   }
+  },
+  {
+   "claim": "c19",
+   "sha": "d3a5e606b3729a5e13b57e4d1a79a7c8b7958b03",
+   "ref": "refs/heads/main",
+   "before": null,
+   "at": 1791817140000,
+   "paths": [
+    "web/src/invoices/PaymentBadge.tsx"
+   ],
+   "outside": [],
+   "accepted": true,
+   "verdict": "unverified",
+   "checks": {
+    "status": "skipped",
+    "command": "npm test",
+    "exitCode": 1,
+    "finishedAt": 1791817140000,
+    "log": "no checks declared",
+    "startedAt": 1791817140000
+   }
+  }
+ ],
+ "lines": [
+  {
+   "name": "main",
+   "repo": {
+    "name": "demo.line.main",
+    "remote": "https://artifacts.example/superpose/demo.line.main.git"
+   },
+   "head": "2132a4dd58fda946585749bfc7f94a13656dcac3",
+   "served": true,
+   "decision": "Where do dates become local time?",
+   "option": "in each feature, as needed",
+   "landing": {
+    "claim": "c7",
+    "sha": "a09406fb78bb62e88dbb2de910945396be300261",
+    "startedAt": 1791817182000
+   }
+  },
+  {
+   "name": "tz-utc",
+   "repo": {
+    "name": "demo.line.tz-utc",
+    "remote": "https://artifacts.example/superpose/demo.line.tz-utc.git"
+   },
+   "head": "dfd3709bc0c903b921ebd61ecd99f4a00d96e679",
+   "served": false,
+   "from": "main",
+   "inherits": [
+    "c8",
+    "c13"
+   ],
+   "decision": "Where do dates become local time?",
+   "option": "only at the edge, stored as UTC"
+  }
+ ]
+}

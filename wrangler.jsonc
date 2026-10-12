@@ -25,6 +25,14 @@
   ],
   // No Docker here: containers run only when deployed.
   "dev": { "enable_containers": false },
+  // The live canvas (public/): served as static files. /api/* and the served
+  // app (/served/*) reach the Worker; any other path (e.g. /g/demo) gets
+  // public/index.html.
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/served/*"]
+  },
   // Every claim gets its own repo here: a fork of its line, named <graph>.claim.<id>.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "superpose" }],
   // Every push to any repo in the namespace starts a PushFlow, which reads the
