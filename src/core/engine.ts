@@ -163,8 +163,15 @@ export class Engine {
     });
   }
 
+  // Work an agent can take now: claims that are ready, and claims whose
+  // holder's lease lapsed (an agent that died), which can be taken over.
   ready(): Claim[] {
-    return this.claims().filter((c) => this.isReady(c.id));
+    const now = this.clock.now();
+    return this.claims().filter(
+      (c) =>
+        this.isReady(c.id) ||
+        ((c.status === 'claimed' || c.status === 'stale') && (!c.lease || c.lease.expiresAt <= now)),
+    );
   }
 
   // ---- leases --------------------------------------------------------------
