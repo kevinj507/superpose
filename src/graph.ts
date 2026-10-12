@@ -305,6 +305,9 @@ export class Graph extends DurableObject<Env> {
       events: e.events(),
       pushes: this.store.pushes(),
       lines: e.lines(),
+      // For live countdowns on the canvas.
+      now: Date.now(),
+      leaseMs: this.leaseMs,
     }));
   }
 }

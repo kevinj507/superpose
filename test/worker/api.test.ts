@@ -161,12 +161,13 @@ describe('the Durable Object', () => {
 
   it('leaves the graph unchanged when a call fails', async () => {
     const p = await project();
-    const before = (await api('GET', `${p.g}/snapshot`)).data;
+    const { now: _then, ...before } = (await api('GET', `${p.g}/snapshot`)).data;
     const bad = await api('POST', `${p.g}/findings`, p.tokens[p.onB[0].id], {
       finder: p.onB[0].id, statement: 'x', effect: 'contradicts', targets: ['a999'],
     });
     expect(bad.status).toBe(404);
-    expect((await api('GET', `${p.g}/snapshot`)).data).toEqual(before);
+    const { now: _now, ...after } = (await api('GET', `${p.g}/snapshot`)).data;
+    expect(after).toEqual(before);
   });
 });
 
