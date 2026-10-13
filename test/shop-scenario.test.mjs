@@ -25,10 +25,19 @@ describe('the shop scenario', () => {
     expect(report.scopes.integratedDiffers).toEqual(['src/pages.js', 'test/pages.test.js']);
   });
 
-  it.each(['seed', 'naive', 'integrated'])('the visible tests pass: %s', (name) => {
+  it.each(['seed', 'integrated'])('the visible tests pass: %s', (name) => {
     const { visible } = variant(name);
     expect(visible.ok, visible.tail).toBe(true);
     expect(visible.fail).toBe(0);
+  });
+
+  it('on the naive combination only the constitution fails among the visible tests', () => {
+    // The constitution's "what you see is what you pay" is the hidden test
+    // made visible: it passes with either group alone and fails on the pair.
+    const { visible } = variant('naive');
+    expect(visible.ok).toBe(false);
+    expect(visible.fail).toBe(1);
+    expect(visible.failing).toEqual(['what you see is what you pay']);
   });
 
   it('the hidden check passes on the seed, where prices never move', () => {

@@ -138,6 +138,8 @@ function readPlan(dir) {
   for (const c of claims) visit(c, []);
   return {
     name: plan.name ?? basename(dir),
+    // The constitution, shown to every agent as the Superpose brief shows it.
+    constitution: (plan.constitution ?? []).map((a) => ({ key: a.key, statement: a.statement, ...(a.check ? { check: a.check } : {}) })),
     tasks: claims.map((c) => ({ key: c.key, statement: c.statement, scope: c.scope, requires: c.requires ?? [], status: 'pending' })),
     // Lines forked from another build one decision two ways; plain git has one main.
     forks: (plan.lines ?? []).filter((l) => l.from).map((l) => l.name),
@@ -169,7 +171,7 @@ function checkConfig(seedDir) {
 // Where CLAIM.md says to declare an assumption, this says to work it out;
 // where it says to file a finding, this says to put it in the commit message,
 // the one channel plain git has between agents.
-function renderTaskMd(task, { tasks, byKey, readme, check, askBothWays = false }) {
+function renderTaskMd(task, { tasks, byKey, readme, check, askBothWays = false, constitution = [] }) {
   const branch = `task/${task.key}`;
   const out = [];
   out.push(`# Task ${task.key}`, '');
@@ -180,6 +182,23 @@ function renderTaskMd(task, { tasks, byKey, readme, check, askBothWays = false }
     `This directory is your clone, on the branch \`${branch}\`; the other agents push to the same \`main\`.`,
     '',
   );
+  // The constitution, as the Superpose brief shows it, with plain git's one
+  // enforcement: the tests run it, and nothing else does.
+  if (constitution.length) {
+    out.push('## The constitution: what this product keeps, whatever you build', '');
+    for (const a of constitution) out.push(`- \`${a.key}\`: ${a.statement}${a.check ? ` (checked by \`${a.check}\`)` : ' (no test: judged)'}`);
+    out.push(
+      '',
+      'Your statement is a minimum; these are bounds, and every task keeps them. The tests run them (`npm test` includes',
+      '`constitution/`), on your clone as it stands: work that is right on its own and wrong next to other work shows up',
+      "only when your clone has the other work in it, so bring your branch up to date with main and run the tests again",
+      'before you push. Before you write code, read the other work in this project below and ask whether your statement,',
+      'built the obvious way, keeps every article next to it; if not, build it so that it does. If an article and your',
+      'statement cannot both hold, say so in your commit message. The files under `constitution/` belong to the owner:',
+      'never change them.',
+      '',
+    );
+  }
   out.push('## Files this task is expected to change', '');
   for (const p of task.scope) out.push(`- \`${p}\``);
   out.push(
@@ -396,8 +415,9 @@ class PlainRunner {
     let visible = null;
     let hidden = null;
     let mainSha = null;
-    if (!this.stopping) ({ visible, hidden, mainSha } = await this.finalChecks());
-    this.summarise({ t0, visible, hidden, mainSha });
+    let constitutionTouched = [];
+    if (!this.stopping) ({ visible, hidden, mainSha, constitutionTouched } = await this.finalChecks());
+    this.summarise({ t0, visible, hidden, mainSha, constitutionTouched });
   }
 
   // One commit on main with the scenario's seed, in a bare repository that,
@@ -511,6 +531,7 @@ class PlainRunner {
       readme: existsSync(readme) ? readFileSync(readme, 'utf8') : null,
       check: this.opts.check,
       askBothWays: this.opts.askBothWays,
+      constitution: this.plan.constitution ?? [],
     });
     atomicWrite(join(dir, 'TASK.md'), brief);
   }
@@ -660,7 +681,18 @@ class PlainRunner {
     const visible = await this.visibleTests(checkout);
     const script = this.opts.hiddenCheck ?? join(this.opts.scenarioDir, 'hidden', 'check.mjs');
     const hidden = existsSync(script) ? await this.hiddenCheck(script, checkout) : { status: 'none', why: 'the scenario has no hidden/check.mjs' };
-    return { visible, hidden, mainSha };
+    // Nothing stops a plain-git agent from editing the constitution: record
+    // every commit on main after the seed that touched it.
+    const constitutionTouched = git(checkout, ['log', '--format=%h%x09%an%x09%s', 'HEAD', '--', 'constitution/'], { check: false })
+      .stdout.split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        const [sha, author, subject] = l.split('\t');
+        return { sha, author, subject };
+      })
+      .filter((c) => !/^Start the /.test(c.subject ?? ''));
+    if (constitutionTouched.length) this.log(null, `constitution/ was changed on main by: ${constitutionTouched.map((c) => `${c.sha} (${c.author})`).join(', ')}`);
+    return { visible, hidden, mainSha, constitutionTouched };
   }
 
   // The project's tests on the checkout, as runner/final-check.mjs runs them
@@ -726,7 +758,7 @@ class PlainRunner {
     return result;
   }
 
-  summarise({ t0, visible, hidden, mainSha }) {
+  summarise({ t0, visible, hidden, mainSha, constitutionTouched = [] }) {
     const { opts } = this;
     const count = (status) => this.tasks.filter((t) => t.status === status).length;
     const done = count('done');
@@ -798,6 +830,7 @@ class PlainRunner {
       totals,
       tasks,
       main: mainSha,
+      constitutionTouched,
       visible,
       hidden,
       repo: this.origin,

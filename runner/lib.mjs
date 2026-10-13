@@ -113,8 +113,9 @@ export class Api {
   impact(finding) {
     return this.request('GET', `/findings/${finding}/impact`);
   }
-  addAssumption(admin, statement) {
-    return this.request('POST', '/assumptions', { token: admin, body: { statement } });
+  // extra: { constitution: true, check } for an article of the constitution.
+  addAssumption(admin, statement, extra = {}) {
+    return this.request('POST', '/assumptions', { token: admin, body: { statement, ...extra } });
   }
   addClaim(admin, claim) {
     return this.request('POST', '/claims', { token: admin, body: claim });
@@ -415,7 +416,14 @@ export const STANDING_NOTICES = new Set(['claim.helped', 'claim.stale', 'scope.t
 
 // What agents must not finish without having read: everything the platform
 // says about the work itself, as opposed to receipts for their own actions.
-export const MUST_READ_NOTICES = new Set([...STANDING_NOTICES, 'local.advice', 'local.doubt']);
+export const MUST_READ_NOTICES = new Set([...STANDING_NOTICES, 'local.advice', 'local.doubt', 'claim.pair_checked']);
+
+export function mustRead(notice) {
+  if (!MUST_READ_NOTICES.has(notice.type)) return false;
+  // A pair check that passed is a receipt; one that broke or conflicted is not.
+  if (notice.type === 'claim.pair_checked') return notice.data?.status === 'broken' || notice.data?.status === 'conflict';
+  return true;
+}
 
 // The events addressed to one claim, described, newest last.
 export function noticesAbout(index, claimId, { afterSeq = 0, types = null } = {}) {
@@ -533,12 +541,31 @@ export function describeNotice(n, index, claimId) {
   const base = { seq: n.seq, type: n.type, at: Date.now(), data: d };
   switch (n.type) {
     case 'claim.stale':
+      if (d.constitution) {
+        const partners = (d.where ?? []).filter((w) => w !== claimId);
+        return {
+          ...base,
+          title: `CONSTITUTION BROKEN: claim ${claimId}'s commit, merged with the line, breaks ${(d.assumptions ?? []).join(', ')}`,
+          text:
+            `The gate merged your commit with the line as it stands and ran the constitution on the pair. It found: “${d.statement ?? ''}”\n` +
+            `Your commit alone passes its checks, and so does the line; together they break ${assumptionList(d.assumptions)}` +
+            (partners.length ? `, with ${partners.map((p) => `${p} ${quoteStatement(node(p))}`).join(' and ')} (already landed)` : '') +
+            '.\n' +
+            'Your claim is stale: pushes are refused until you re-plan. Do this now:\n' +
+            `1. Re-plan, keeping what still holds: \`${CMD} replan --rests-on <assumption ids>\` (this acknowledges the break and records a new version).\n` +
+            '2. Make your statement true WITHOUT breaking the article, inside your scope (your own files are usually enough: read them again before deciding they are not).\n' +
+            '3. Commit and push; the gate runs the constitution on the pair again.\n' +
+            `If the article and your statement truly cannot both hold, say so instead: \`${CMD} finding --contradicts <article id> --where ${(d.where ?? [claimId]).join(',')} "<why>"\`, and the owner decides.`,
+        };
+      }
       return {
         ...base,
         title: `STALE: an assumption under claim ${claimId} was shown to be false`,
         text:
           `Finding ${d.finding} was verified: “${d.statement ?? node(d.finding)?.statement ?? ''}”.\n` +
-          `It contradicts ${assumptionList(d.assumptions)}, which this claim rests on (directly, or through a claim it builds on).\n` +
+          `It contradicts ${assumptionList(d.assumptions)}, which this claim rests on (directly, or through a claim it builds on)` +
+          (Array.isArray(d.where) ? `, where ${d.where.join(' and ')} are together` : '') +
+          '.\n' +
           'Your claim is now stale: pushes are refused and the lease is not renewed until you re-plan.\n' +
           'Do this now, before the lease runs out:\n' +
           '1. Decide how the work must change now that the assumption is false.\n' +
@@ -546,6 +573,30 @@ export function describeNotice(n, index, claimId) {
           `3. Re-plan: \`${CMD} replan --rests-on <ids that still hold>\` (add \`--add-scope <patterns>\` if it needs more files).\n` +
           '4. Rework the code, commit, and push again.',
       };
+    case 'claim.pair_checked': {
+      const at = `${shortSha(d.sha ?? '')} merged with the line at ${shortSha(d.lineHead ?? '')}`;
+      if (d.status === 'passed') return { ...base, title: `CONSTITUTION KEPT: ${at} keeps every article`, text: 'The constitution ran on your commit merged with the line as it stands, and every article held.' };
+      if (d.status === 'broken') {
+        return {
+          ...base,
+          title: `CONSTITUTION BROKEN: ${at} breaks ${(d.broken ?? []).join(', ')}`,
+          text:
+            `Articles broken on the pair: ${assumptionList(d.broken)}.` +
+            (typeof d.partner === 'string' ? ` Each alone holds; your commit breaks them together with ${d.partner} ${quoteStatement(node(d.partner))}, already landed.` : '') +
+            (d.current === false ? '\nThis was an earlier commit of yours; the gate judges your latest one on its own.' : '\nA STALE notice says what to do.'),
+        };
+      }
+      if (d.status === 'conflict') {
+        return {
+          ...base,
+          title: `CONFLICT WITH THE LINE: ${at} does not merge cleanly`,
+          text: `The line has moved on and your commit conflicts with it in: ${(d.files ?? []).join(', ')}. The landing would conflict too. Keep your changes to those files small, and finish; a human decides how the conflict is resolved.`,
+        };
+      }
+      return { ...base, title: `The pair check on ${shortSha(d.sha ?? '')} ${d.status}`, text: 'The constitution could not be run on your commit merged with the line this time. It is tried again on your next push.' };
+    }
+    case 'reality.restored':
+      return { ...base, title: `RESTORED: the constitution holds again where claim ${claimId} is`, text: `Finding ${d.finding} is resolved: a later commit of ${d.by ?? 'the claim it was about'} keeps the article together with this work.` };
     case 'claim.helped':
       return {
         ...base,
@@ -599,6 +650,13 @@ export function describeNotice(n, index, claimId) {
         text: 'It has been unverified for longer than the hedge window; a human has been asked to decide. Carry on meanwhile.',
       };
     case 'reality.at_risk':
+      if (Array.isArray(d.where)) {
+        return {
+          ...base,
+          title: `AT RISK: the constitution is broken where claim ${claimId}'s landed work meets ${d.where.filter((w) => w !== claimId).join(', ') || 'another claim'}`,
+          text: `Finding ${d.finding}: ${assumptionList(d.assumptions)} fails on the combination. The line is unsafe to serve until the other claim is re-planned so the article holds again.`,
+        };
+      }
       return {
         ...base,
         title: 'AT RISK: landed work rests on a contradicted assumption',
@@ -644,6 +702,10 @@ export function findingsAbout(index, claimId) {
     if (f.kind !== 'finding' || f.finder === claimId) continue;
     if (f.effect === 'helps') {
       if (f.targets.includes(claimId)) out.push({ ...f, doubted: [] });
+    } else if (f.where?.includes(claimId)) {
+      // A contradiction located on this claim: the constitution, or an
+      // assumption, broken where this claim's work is.
+      if (f.status !== 'resolved') out.push({ ...f, doubted: f.targets.map((a) => index.nodes.get(a)).filter(Boolean) });
     } else {
       const doubted = f.targets.filter((a) => restsOn.has(a)).map((a) => restsOn.get(a));
       if (doubted.length) out.push({ ...f, doubted });
@@ -672,6 +734,24 @@ export function renderClaimMd(claim, index, dir) {
     `This directory is a clone of the repository for claim ${id}; nobody else pushes here.`,
     '',
   );
+  // The constitution: what the product keeps whatever is built. A statement
+  // is a minimum; these are bounds, and every claim rests on them by rule.
+  const constitution = index ? [...index.nodes.values()].filter((n) => n.kind === 'assumption' && n.constitution && n.status === 'holding') : [];
+  if (constitution.length) {
+    lines.push('## The constitution: what this product keeps, whatever you build', '');
+    for (const a of constitution) lines.push(`- \`${a.id}\`: ${a.statement}${a.check ? ` (checked by \`${a.check}\`)` : ' (judged: no test, a checker reads against it)'}`);
+    lines.push(
+      '',
+      'Your statement is a minimum; these are bounds, and every claim rests on them. At every push the platform merges',
+      'your commit with the line as it stands and runs them on the pair: work that is right on its own and wrong next to',
+      "other work is caught there, with the article's own words and the claim it breaks with, and your claim goes stale",
+      'until it is re-planned and the article holds again. So before you write code, read the other work in this reality',
+      'below and ask whether your statement, built the obvious way, keeps every article next to it; if not, build it',
+      `so that it does, inside your scope. If an article and your statement cannot both hold, say so: \`${CMD} finding --contradicts <article id> --where <claim ids> "<why>"\`,`,
+      'and the owner decides. The files under `constitution/` belong to no claim: never change them.',
+      '',
+    );
+  }
   if (claim.status === 'stale' || hasMarker(dir, 'STALE')) {
     lines.push(
       '> **This claim is STALE.** An assumption it rested on was shown to be false. Before any other work,',
@@ -716,8 +796,9 @@ export function renderClaimMd(claim, index, dir) {
   if (told.length) {
     lines.push('## What others have told this claim', '');
     for (const f of told) {
-      const state = f.status === 'verified' ? 'verified' : f.status === 'refuted' ? 'refuted by a checker' : 'filed, not yet verified';
-      const about = f.effect === 'helps' ? '' : ` It says this is false: ${f.doubted.map((a) => `\`${a.id}\` “${a.statement}”`).join('; ')}.`;
+      const state = f.status === 'verified' ? (f.finder === 'gate' ? 'measured by the gate' : 'verified') : f.status === 'refuted' ? 'refuted by a checker' : 'filed, not yet verified';
+      const where = f.where ? ` It holds where ${f.where.join(' and ')} are together.` : '';
+      const about = f.effect === 'helps' ? '' : ` It says this is false: ${f.doubted.map((a) => `\`${a.id}\` “${a.statement}”`).join('; ')}.${where}`;
       lines.push(`- \`${f.id}\` from \`${f.finder}\` (${state}): ${f.statement}${about}`);
     }
     lines.push(

@@ -1,6 +1,28 @@
 {
   "name": "tiny-shop",
   "description": "A tiny web shop in plain Node: a catalog, product pages, buying and prices. Six pieces of work, built by agents at the same time.",
+  "constitution": [
+    {
+      "key": "see-is-pay",
+      "statement": "What you see is what you pay: a buyer is charged the price the product's page showed just before the purchase.",
+      "check": "node --test constitution/see-is-pay.test.js"
+    },
+    {
+      "key": "unknown-404",
+      "statement": "A product the shop does not sell has no page and cannot be bought: GET /products/<id> answers 404, and POST /products/<id>/buy answers 404 with ok false.",
+      "check": "node --test constitution/unknown-404.test.js"
+    },
+    {
+      "key": "price-shown",
+      "statement": "Every product page shows the product's name and its price in dollars and cents inside <span class=\"price\">, like $40.00.",
+      "check": "node --test constitution/price-shown.test.js"
+    },
+    {
+      "key": "buy-says-price",
+      "statement": "Every purchase answers with ok true, the product's id, and the price the buyer paid as a number.",
+      "check": "node --test constitution/buy-says-price.test.js"
+    }
+  ],
   "assumptions": [],
   "claims": [
     {

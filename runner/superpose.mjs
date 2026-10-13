@@ -20,8 +20,8 @@ import { parseArgs } from 'node:util';
 import {
   Api,
   CMD,
-  MUST_READ_NOTICES,
   UsageError,
+  mustRead,
   adviceFor,
   advanceSeenSeq,
   changedSince,
@@ -89,6 +89,7 @@ const OPTIONS = {
   json: { type: 'boolean' },
   contradicts: { type: 'string', multiple: true },
   helps: { type: 'string', multiple: true },
+  where: { type: 'string', multiple: true },
   'rests-on': { type: 'string', multiple: true },
   scope: { type: 'string', multiple: true },
   'add-scope': { type: 'string', multiple: true },
@@ -247,7 +248,9 @@ async function finding({ dir, claim, api }, values, positionals) {
   }
   const effect = contradicts.length ? 'contradicts' : 'helps';
   const targets = contradicts.length ? contradicts : helps;
-  const res = await api.finding(claim.lease, { finder: claim.claim, statement, effect, targets });
+  // --where c2,c3: the assumption is false only where these claims are together.
+  const where = effect === 'contradicts' ? list(values.where) : [];
+  const res = await api.finding(claim.lease, { finder: claim.claim, statement, effect, targets, ...(where.length ? { where } : {}) });
   if (!res.ok) throw new Refused(`Could not file the finding. ${explainError(res)}`);
   const { finding: f, duplicate } = res.data;
   const index = await snapshotIndex(api);
@@ -365,7 +368,7 @@ async function done({ dir, claim, api }, values) {
   // Nothing is finished past what the platform said about it. Anything the
   // agent has not yet been shown is shown now, once; the next `done` goes on.
   pullNotices(dir, claim, await snapshotIndex(api));
-  const unread = peekUnread(dir, 'agent').filter((n) => MUST_READ_NOTICES.has(n.type));
+  const unread = peekUnread(dir, 'agent').filter(mustRead);
   if (unread.length) {
     takeUnread(dir, 'agent');
     throw new Refused(
@@ -432,6 +435,25 @@ async function done({ dir, claim, api }, values) {
       if (row.verdict === 'unverified' && row.checks?.status !== 'skipped') {
         say('Finishing anyway: the platform lands the claim only if the tests pass.');
       }
+      // The gate on the pair: nothing finishes that breaks the constitution
+      // together with the line.
+      if (row.verdict === 'checks-passed') {
+        const paired = await pairFor(api, claim, head, Number(values.wait ?? 150));
+        const pair = paired?.pair;
+        if (pair?.status === 'broken') {
+          const index = await snapshotIndex(api);
+          throw new Refused(
+            `Not finished: commit ${shortSha(head)} merged with the line at ${shortSha(pair.lineHead ?? '')} breaks the constitution: ` +
+              (pair.broken ?? []).map((a) => `${a} ${quoteStatement(index?.nodes.get(a))}`).join('; ') +
+              (pair.partner ? `, together with ${pair.partner} ${quoteStatement(index?.nodes.get(pair.partner))} (already landed)` : '') +
+              `.\nThe end of the output:\n${indent(lastLines(pair.log ?? '', 30))}\n` +
+              `Your commit alone passes; the pair does not. Read .superpose/NOTICES.md: re-plan (\`${CMD} replan --rests-on <ids>\`), make your statement true without breaking the article, inside your scope, push, and run done again.`,
+          );
+        }
+        if (pair?.status === 'conflict') say(`Note: ${shortSha(head)} no longer merges cleanly with the line (${(pair.files ?? []).join(', ')}); the landing will need a decision.`);
+        else if (pair?.status === 'passed') say(`The constitution holds on ${shortSha(head)} merged with the line at ${shortSha(pair.lineHead ?? '')}.`);
+        else if (!pair || pair.status === 'running') say('The constitution check on your commit merged with the line has not finished; finishing anyway, the landing runs it again.');
+      }
     }
   } else {
     say('Nothing changed relative to the starting point; finishing with no new commits.');
@@ -448,6 +470,20 @@ async function done({ dir, claim, api }, values) {
   setMarker(dir, 'DONE', `Finished at ${new Date().toISOString()} with ${head}.`);
   if (values.json) return say(JSON.stringify({ finished: claim.claim, head }));
   say(`Finished claim ${claim.claim} at ${shortSha(head)}. Its write access has ended. You are done: stop here.`);
+}
+
+// The ledger row once the pair check on a commit has settled (passed, broken,
+// conflict, error or skipped), or as it stands when the wait runs out.
+async function pairFor(api, claim, sha, waitSeconds) {
+  const started = Date.now();
+  let row = null;
+  while (Date.now() - started < waitSeconds * 1000) {
+    const index = await snapshotIndex(api);
+    row = index?.pushes.find((p) => p.claim === claim.claim && p.sha === sha) ?? row;
+    if (row?.pair && row.pair.status !== 'running') return row;
+    await sleep(5000);
+  }
+  return row;
 }
 
 // The ledger row for one commit, once the platform is through with it: the

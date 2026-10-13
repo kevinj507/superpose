@@ -17,8 +17,12 @@ A tiny web shop in plain Node 22: ES modules, no dependencies. It sells a few pr
 
   Anything else is a 404. `handle` does no I/O, so tests call it directly: `await handle({ method: 'GET', path: '/products/lamp' })`.
 
+## The constitution
+
+`constitution/` holds what the shop keeps whatever is built, each article a test: what you see is what you pay (a buyer is charged the price the page showed just before the purchase), an unknown product has no page and cannot be bought, every product page shows the name and a price like `$40.00`, and every purchase says what was paid. These files belong to the owner and no task changes them.
+
 ## Tests
 
-`npm test` runs every test in `test/` with `node --test`. Each `src/<name>.js` has its tests in `test/<name>.test.js`, written with `node:test` and `node:assert/strict`.
+`npm test` runs every test in `test/` and `constitution/` with `node --test`. Each `src/<name>.js` has its tests in `test/<name>.test.js`, written with `node:test` and `node:assert/strict`.
 
 The shop's state (orders, and anything else a module keeps) lives in module variables. `node --test` runs each test file in a process of its own, so one test file never sees another's purchases; within a file, reset what you change (for example with `resetOrders()` in a `beforeEach`).

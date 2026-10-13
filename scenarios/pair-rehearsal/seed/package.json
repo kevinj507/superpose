@@ -1,0 +1,10 @@
+{
+  "name": "pair-rehearsal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Two notes and one article: a rehearsal for the gate on combinations",
+  "scripts": {
+    "test": "node --test"
+  }
+}

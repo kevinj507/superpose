@@ -18,6 +18,9 @@ const snap = {
     { id: 'f1', kind: 'finding', effect: 'helps', status: 'verified', finder: 'c2', targets: ['c1'], statement: 'A cached page keeps showing the old price after a buy.' },
     { id: 'f2', kind: 'finding', effect: 'contradicts', status: 'unverified', finder: 'c2', targets: ['a1'], statement: 'Prices move on every purchase.' },
     { id: 'f3', kind: 'finding', effect: 'helps', status: 'unverified', finder: 'c1', targets: ['c2'], statement: 'There is a helper for this.' },
+    { id: 'a9', kind: 'assumption', status: 'holding', statement: 'What you see is what you pay.', constitution: true, check: 'node --test constitution/see-is-pay.test.js' },
+    { id: 'a10', kind: 'assumption', status: 'holding', statement: 'Prices are never surprising.', constitution: true },
+    { id: 'f9', kind: 'finding', effect: 'contradicts', status: 'verified', finder: 'gate', targets: ['a9'], where: ['c1', 'c2'], statement: '“What you see is what you pay.” is false where c1 at abc1234 and c2 are together: purchase 2 charged $42.00, but its page showed $40.00' },
   ],
   edges: [{ source: 'a1', target: 'c1', purpose: 'required for' }],
   pushes: [],
@@ -52,6 +55,25 @@ describe('the claim brief', () => {
     expect(other).not.toContain('`f1`');
     // Nothing to tell: no section.
     expect(brief('c3')).not.toContain('## What others have told this claim');
+  });
+
+  it('shows the constitution first, with each article\'s check or that it is judged', () => {
+    const md = brief('c2');
+    expect(md).toContain('## The constitution: what this product keeps, whatever you build');
+    expect(md).toContain('- `a9`: What you see is what you pay. (checked by `node --test constitution/see-is-pay.test.js`)');
+    expect(md).toContain('- `a10`: Prices are never surprising. (judged: no test, a checker reads against it)');
+    expect(md.indexOf('## The constitution')).toBeLessThan(md.indexOf('## Scope'));
+    expect(md).toContain('merges\nyour commit with the line as it stands and runs them on the pair');
+    expect(md).toContain('The files under `constitution/` belong to no claim: never change them.');
+  });
+
+  it('a gate finding located on the claim is among what it has been told, with where it holds', () => {
+    const md = brief('c1');
+    expect(md).toContain('`f9` from `gate` (measured by the gate):');
+    expect(md).toContain('It holds where c1 and c2 are together.');
+    expect(md).toContain('It says this is false: `a9` “What you see is what you pay.”');
+    expect(brief('c2')).toContain('`f9` from `gate`');
+    expect(brief('c3')).not.toContain('`f9`');
   });
 
   it('asks both ways, and asks for assumptions before any code', () => {

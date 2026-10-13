@@ -65,7 +65,12 @@ route('GET', '/api/graphs/:gid/why', 'public', ({ graph, query }) => graph.why(q
 route('GET', '/api/graphs/:gid/findings/:fid/impact', 'public', ({ graph, params }) => graph.impactOf(params.fid!));
 
 route('DELETE', '/api/graphs/:gid', 'admin', ({ graph, params }) => graph.destroy(params.gid!));
-route('POST', '/api/graphs/:gid/assumptions', 'admin', ({ graph, body }) => graph.addAssumption(str(body.statement)));
+// With `constitution: true`: an article every claim on the line rests on by
+// rule, run by the gate on every push merged with the line when it has a
+// `check` (a command at the repo root), judged when it has none.
+route('POST', '/api/graphs/:gid/assumptions', 'admin', ({ graph, body }) =>
+  graph.addAssumption(str(body.statement), { constitution: body.constitution === true, check: str(body.check) || undefined }),
+);
 route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
   graph.addClaim({
     statement: str(body.statement),
@@ -136,6 +141,7 @@ route('POST', '/api/graphs/:gid/findings', 'lease', ({ graph, body, bearer }) =>
     statement: str(body.statement),
     effect: body.effect === 'helps' ? 'helps' : 'contradicts',
     targets: strs(body.targets),
+    where: strs(body.where),
   }),
 );
 

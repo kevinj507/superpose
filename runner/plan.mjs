@@ -5,7 +5,8 @@
 //
 // scenarios/<name>/plan.json lists the assumptions and claims, and optionally
 // more lines (one decision built two ways):
-//   { "assumptions": [{ "key": "ascii", "statement": "..." }],
+//   { "constitution": [{ "key": "see-is-pay", "statement": "...", "check": "node --test constitution/see-is-pay.test.js" }],
+//     "assumptions": [{ "key": "ascii", "statement": "..." }],
 //     "lines": [{ "name": "fast", "from": "main", "decision": "storage", "option": "in memory" }],
 //     "claims": [{ "key": "slugify", "statement": "...", "scope": ["src/slugify.js"],
 //                  "restsOn": ["ascii"], "requires": ["other claim key"], "line": "fast" }] }
@@ -43,7 +44,14 @@ function readPlan(dir) {
   if (!existsSync(file)) throw new UsageError(`${file} not found`);
   const plan = JSON.parse(readFileSync(file, 'utf8'));
   const assumptions = plan.assumptions ?? [];
+  const constitution = plan.constitution ?? [];
   const claims = plan.claims ?? [];
+  for (const a of constitution) {
+    if (typeof a.key !== 'string' || !a.key || typeof a.statement !== 'string' || !a.statement.trim()) {
+      throw new UsageError('every article of the constitution needs a "key" and a "statement"');
+    }
+    if (a.check !== undefined && (typeof a.check !== 'string' || !a.check.trim())) throw new UsageError(`article "${a.key}": "check" must be a command`);
+  }
   const aKeys = new Set();
   for (const a of assumptions) {
     if (!a.key || !a.statement) throw new UsageError(`every assumption needs a key and a statement: ${JSON.stringify(a)}`);
@@ -78,7 +86,7 @@ function readPlan(dir) {
     for (const k of c.requires ?? []) if (!cKeys.has(k)) throw new UsageError(`claim "${c.key}" requires unknown claim "${k}"`);
     if (c.line && !lineNames.has(c.line)) throw new UsageError(`claim "${c.key}" builds on unknown line "${c.line}"`);
   }
-  return { name: plan.name ?? basename(dir), assumptions, lines, claims: inDependencyOrder(claims) };
+  return { name: plan.name ?? basename(dir), assumptions, constitution, lines, claims: inDependencyOrder(claims) };
 }
 
 // Claims are created after the claims they require (the API checks they exist).
@@ -193,7 +201,15 @@ async function main() {
       console.log(`  line       ${l.name}: forked from ${l.from}${what ? ` (${what})` : ''}${overlaid}`);
     }
 
-    const ids = { assumptions: {}, claims: {} };
+    const ids = { assumptions: {}, constitution: {}, claims: {} };
+    // The constitution first: what the product keeps whatever is built, each
+    // article with its check (a command at the repo root) or judged without one.
+    for (const a of plan.constitution) {
+      const res = await api.addAssumption(admin, a.statement, { constitution: true, ...(a.check ? { check: a.check } : {}) });
+      if (!res.ok) throw new Error(`could not create article "${a.key}": ${explainError(res)}`);
+      ids.constitution[a.key] = res.data.id;
+      console.log(`  article    ${res.data.id.padEnd(4)} ${a.key}: ${a.statement}${a.check ? ` [${a.check}]` : ' [judged]'}`);
+    }
     for (const a of plan.assumptions) {
       const res = await api.addAssumption(admin, a.statement);
       if (!res.ok) throw new Error(`could not create assumption "${a.key}": ${explainError(res)}`);
@@ -224,7 +240,7 @@ async function main() {
     writeFileSync(join(runsDir, 'plan-ids.json'), JSON.stringify({ graph, url, scenario: plan.name, ...ids }, null, 2) + '\n');
     const lineCount = new Set(['main', ...plan.lines.map((l) => l.name)]).size;
     console.log(
-      `\nGraph ${graph} is ready: ${plan.assumptions.length} assumptions, ${plan.claims.length} claims` +
+      `\nGraph ${graph} is ready: ${plan.constitution.length ? `a constitution of ${plan.constitution.length} articles, ` : ''}${plan.assumptions.length} assumptions, ${plan.claims.length} claims` +
         `${lineCount > 1 ? `, ${lineCount} lines` : ''}.`,
     );
     console.log(`Canvas: ${canvasUrl(url, graph)}`);

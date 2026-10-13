@@ -1,5 +1,6 @@
 import { inScope, outOfScope, scopesOverlap, validScope } from './scope';
 import type { Store } from './store';
+import type { PairCheck } from './types';
 import type {
   Assumption,
   CheckRun,
@@ -91,6 +92,16 @@ export interface PushResult {
   outside?: string[];
 }
 
+// What the pair check needs, or why there is none to run.
+export type PairContext =
+  | { skip: string }
+  | {
+      line: RepoRef;
+      claim: RepoRef;
+      articles: { id: string; check: string; statement: string }[];
+      candidates: { claim: string; merge: string }[];
+    };
+
 export interface Impact {
   affected: string[]; // claims that go stale
   landedAtRisk: string[]; // landed claims, part of the served reality
@@ -111,15 +122,23 @@ export class Engine {
 
   // ---- building the plan -------------------------------------------------
 
-  addAssumption(statement: string): Assumption {
+  addAssumption(statement: string, extra: { constitution?: boolean; check?: string } = {}): Assumption {
     const a: Assumption = {
       id: this.store.nextId('a'),
       kind: 'assumption',
       statement,
       status: 'holding',
+      ...(extra.constitution ? { constitution: true } : {}),
+      ...(extra.check?.trim() ? { check: extra.check.trim() } : {}),
     };
     this.store.putNode(a);
     return a;
+  }
+
+  // The constitution: the owner's standing statements, which every claim on
+  // the line rests on by rule.
+  constitution(): Assumption[] {
+    return this.store.allNodes().filter((n): n is Assumption => n.kind === 'assumption' && !!n.constitution && n.status === 'holding');
   }
 
   addClaim(input: NewClaim): Claim {
@@ -164,7 +183,9 @@ export class Engine {
       if (other.status === 'landed' || other.status === 'superseded') continue;
       if (!scopesOverlap(c.scope, other.scope)) continue;
       if (this.buildsOn(c.id, other.id) || this.buildsOn(other.id, c.id)) continue;
-      this.store.addEdge({ source: other.id, target: c.id, purpose: 'required for' });
+      // Ordering only: nothing of this claim's rests on the other's work, so
+      // doubt must not travel along this edge (see downstreamOf).
+      this.store.addEdge({ source: other.id, target: c.id, purpose: 'required for', meta: { order: true } });
       this.emit('claim.ordered', [], { claim: c.id, after: other.id, scope: c.scope, overlaps: other.scope });
     }
   }
@@ -497,6 +518,11 @@ export class Engine {
   finish(id: string, token: string): { revoke: string[]; revokeLine?: Lease['lineToken'] } {
     const c = this.held(id, token);
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
+    // Nothing is finished that breaks the constitution together with the line.
+    const head = c.headSha ? this.store.getPush(id, c.headSha) : undefined;
+    if (head?.pair?.status === 'broken') {
+      throw new EngineError('constitution', `commit ${c.headSha} breaks the constitution together with the line (${(head.pair.broken ?? []).join(', ')}); fix it or re-plan first`);
+    }
     this.store.putNode({
       ...c,
       status: 'done',
@@ -746,14 +772,17 @@ export class Engine {
   fileFinding(
     finderId: string,
     token: string,
-    input: { statement: string; effect: 'contradicts' | 'helps'; targets: string[] },
+    input: { statement: string; effect: 'contradicts' | 'helps'; targets: string[]; where?: string[] },
   ): { finding: Finding; duplicate: boolean } {
     this.held(finderId, token);
     for (const t of input.targets) {
       if (input.effect === 'contradicts') this.assumption(t);
       else this.claimNode(t);
     }
-    const fingerprint = fingerprintOf(input.statement, input.effect, input.targets);
+    // Where a contradiction holds: named claims, only for a contradiction.
+    const where = input.effect === 'contradicts' && input.where?.length ? [...new Set(input.where)] : undefined;
+    for (const w of where ?? []) this.claimNode(w);
+    const fingerprint = fingerprintOf(input.statement, input.effect, input.targets, where);
     const existing = this.findings().find((f) => f.fingerprint === fingerprint);
     if (existing) return { finding: existing, duplicate: true };
     const f: Finding = {
@@ -764,6 +793,7 @@ export class Engine {
       status: 'unverified',
       finder: finderId,
       targets: [...input.targets],
+      ...(where ? { where } : {}),
       fingerprint,
       hedgeUntil: this.clock.now() + this.opts.hedgeMs,
     };
@@ -782,7 +812,12 @@ export class Engine {
     const affected: string[] = [];
     const landedAtRisk: string[] = [];
     let cost = 0;
-    for (const c of this.downstreamOf(f.targets)) {
+    // One rule for doubt: a contradiction with a where doubts the claims
+    // inside it; one without doubts everything that rests on its target.
+    const reached = f.where
+      ? f.where.map((id) => this.store.getNode(id)).filter((n): n is Claim => n?.kind === 'claim' && n.status !== 'open')
+      : this.downstreamOf(f.targets);
+    for (const c of reached) {
       if (c.id === f.finder || c.status === 'superseded') continue;
       if (c.status === 'landed') landedAtRisk.push(c.id);
       else {
@@ -804,11 +839,22 @@ export class Engine {
       this.emit('claim.helped', f.targets, { finding: f.id, statement: f.statement });
       return impact;
     }
-    for (const a of f.targets) {
-      const node = this.assumption(a);
-      if (node.status === 'holding') this.store.putNode({ ...node, status: 'contradicted' });
+    // A located contradiction leaves the target holding everywhere else.
+    if (!f.where) {
+      for (const a of f.targets) {
+        const node = this.assumption(a);
+        if (node.status === 'holding') this.store.putNode({ ...node, status: 'contradicted' });
+      }
     }
+    this.applyDoubt(f, impact);
+    return impact;
+  }
+
+  // What a verified contradiction does to the claims it reaches: in-flight
+  // work goes stale and keeps its branch; landed work is at risk.
+  private applyDoubt(f: Finding, impact: Impact) {
     const now = this.clock.now();
+    const located = f.where ? { where: f.where, constitution: f.finder === 'gate' } : {};
     for (const id of impact.affected) {
       const c = this.claimNode(id);
       if (c.status === 'stale') continue;
@@ -819,12 +865,11 @@ export class Engine {
       // so the claim lands afresh once re-planned and finished.
       const landing = c.landing?.status === 'landing' ? c.landing : undefined;
       this.store.putNode({ ...c, status: 'stale', kept, landing });
-      this.emit('claim.stale', [id], { finding: f.id, statement: f.statement, assumptions: f.targets });
+      this.emit('claim.stale', [id], { finding: f.id, statement: f.statement, assumptions: f.targets, ...located });
     }
     if (impact.landedAtRisk.length) {
-      this.emit('reality.at_risk', impact.landedAtRisk, { finding: f.id, assumptions: f.targets });
+      this.emit('reality.at_risk', impact.landedAtRisk, { finding: f.id, assumptions: f.targets, ...located });
     }
-    return impact;
   }
 
   // A refuted finding is kept, so the next agent to suspect the same thing is
@@ -1034,9 +1079,132 @@ export class Engine {
       const node = this.store.getNode(id);
       if (node?.kind !== 'claim') continue;
       out.push(node);
-      for (const e of this.store.edgesFrom(id, 'required for')) queue.push(e.target);
+      // A claim that only waited for this one (overlapping scopes) rests on
+      // nothing of its work.
+      for (const e of this.store.edgesFrom(id, 'required for')) if (!e.meta?.order) queue.push(e.target);
     }
     return out;
+  }
+
+  // ---- the constitution and the gate on pairs -----------------------------------
+
+  // What the pair check needs for one claim: its repo, its line's repo, the
+  // executable articles, and the landings on the line since the claim's fork
+  // point (the work its head meets), oldest first.
+  pairContext(id: string): PairContext {
+    const c = this.claimNode(id);
+    const articles = this.constitution()
+      .filter((a) => a.check)
+      .map((a) => ({ id: a.id, check: a.check!, statement: a.statement }));
+    if (!articles.length) return { skip: 'the constitution has no executable articles' };
+    const l = this.line(c.line);
+    if (!c.repo || !l.repo) return { skip: `no repo for ${id} or its line` };
+    const landings = this.store
+      .eventsSince(0)
+      .filter((e) => e.type === 'claim.landed' && e.data.line === c.line && typeof e.data.merge === 'string')
+      .map((e) => ({ claim: e.claims[0]!, merge: e.data.merge as string }));
+    const k = landings.findIndex((x) => x.merge === c.forkSha);
+    const candidates = landings.slice(k + 1).filter((x) => x.claim !== id);
+    return { line: l.repo, claim: c.repo, articles, candidates };
+  }
+
+  // Start the pair check on a commit unless a run is already going, or the
+  // commit was already judged against the line as it stands now. A line
+  // that moved since (a landing) makes an earlier verdict void: the pair is
+  // a different pair.
+  beginPair(id: string, sha: string, owner?: string, staleAfterMs = 45 * 60_000): boolean {
+    const row = this.store.getPush(id, sha);
+    if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
+    const now = this.clock.now();
+    if (row.pair?.status === 'running' && owner && row.pair.runner === owner) return true;
+    if (row.pair?.status === 'running' && now - row.pair.startedAt < staleAfterMs) return false;
+    if (row.pair && row.pair.status !== 'running') {
+      const lineHead = this.line(this.claimNode(id).line).head ?? null;
+      const judgedAgainst = row.pair.lineHead ?? null;
+      if (row.pair.status === 'skipped' || judgedAgainst === lineHead) return false;
+    }
+    this.store.putPush({ ...row, pair: { status: 'running', startedAt: now, ...(owner ? { runner: owner } : {}) } });
+    return true;
+  }
+
+  // After a landing, the in-flight heads on the line were paired with a line
+  // that no longer exists. These are judged again against the new head.
+  pairRechecks(lineName: string): { claim: string; sha: string; repo: string }[] {
+    const head = this.line(lineName).head ?? null;
+    const out: { claim: string; sha: string; repo: string }[] = [];
+    for (const c of this.claims()) {
+      if (c.line !== lineName || !c.headSha || !c.repo) continue;
+      if (!(c.status === 'claimed' || c.status === 'stale' || c.status === 'done')) continue;
+      if (c.landing?.status === 'landing') continue;
+      const row = this.store.getPush(c.id, c.headSha);
+      if (!row?.accepted || row.verdict !== 'checks-passed') continue;
+      if (row.pair && (row.pair.status === 'running' || row.pair.status === 'skipped' || (row.pair.lineHead ?? null) === head)) continue;
+      out.push({ claim: c.id, sha: c.headSha, repo: c.repo.name });
+    }
+    return out;
+  }
+
+  // The pair check's result on one commit. A break files a finding the gate
+  // itself verified: the article is false where this claim and its partner
+  // are together, so the claim is stale and a landed partner is at risk.
+  // A pass resolves the gate's earlier findings about this claim. A result
+  // for a commit the claim has since moved past is recorded and nothing more.
+  recordPair(id: string, sha: string, pair: PairCheck): PushRecord {
+    const row = this.store.getPush(id, sha);
+    if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
+    const next: PushRecord = { ...row, pair };
+    this.store.putPush(next);
+    if (pair.status === 'running') return next;
+    const c = this.claimNode(id);
+    const current = c.headSha === sha;
+    this.emit('claim.pair_checked', [id], {
+      sha,
+      status: pair.status,
+      broken: pair.broken ?? [],
+      partner: pair.partner ?? null,
+      lineHead: pair.lineHead ?? null,
+      files: pair.files ?? [],
+      current,
+    });
+    if (!current) return next;
+    if (pair.status === 'broken' && pair.broken?.length) this.fileGateFinding(id, sha, pair);
+    if (pair.status === 'passed') this.resolveGateFindings(id);
+    return next;
+  }
+
+  private fileGateFinding(id: string, sha: string, pair: PairCheck): Finding {
+    const articles = (pair.broken ?? []).map((a) => this.assumption(a));
+    const where = pair.partner && pair.partner !== id ? [id, pair.partner] : [id];
+    const together = pair.partner && pair.partner !== id ? `${id} at ${sha.slice(0, 7)} and ${pair.partner} are together` : `${id} at ${sha.slice(0, 7)} meets the line at ${(pair.lineHead ?? '').slice(0, 7)}`;
+    const statement = `${articles.map((a) => `“${a.statement}”`).join(' and ')} ${articles.length > 1 ? 'are' : 'is'} false where ${together}: ${excerpt(pair.log ?? '')}`;
+    const fingerprint = fingerprintOf(statement, 'contradicts', articles.map((a) => a.id), where);
+    const existing = this.findings().find((f) => f.fingerprint === fingerprint);
+    if (existing) return existing;
+    const f: Finding = {
+      id: this.store.nextId('f'),
+      kind: 'finding',
+      statement,
+      effect: 'contradicts',
+      status: 'verified',
+      finder: 'gate',
+      targets: articles.map((a) => a.id),
+      where,
+      fingerprint,
+      hedgeUntil: this.clock.now(),
+    };
+    this.store.putNode(f);
+    for (const t of f.targets) this.store.addEdge({ source: f.id, target: t, purpose: 'contradicts' });
+    this.applyDoubt(f, this.impactOf(f.id));
+    return f;
+  }
+
+  private resolveGateFindings(id: string) {
+    for (const f of this.findings()) {
+      if (f.finder !== 'gate' || f.status !== 'verified' || !f.where?.includes(id)) continue;
+      this.store.putNode({ ...f, status: 'resolved' });
+      const landed = f.where.filter((w) => this.store.getNode(w)?.kind === 'claim' && (this.store.getNode(w) as Claim).status === 'landed');
+      this.emit('reality.restored', landed, { finding: f.id, by: id });
+    }
   }
 
   private held(id: string, token: string): Claim {
@@ -1077,8 +1245,28 @@ function normalise(statement: string): string {
   return statement.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-function fingerprintOf(statement: string, effect: string, targets: string[]): string {
-  return `${effect}|${[...targets].sort().join(',')}|${normalise(statement)}`;
+function fingerprintOf(statement: string, effect: string, targets: string[], where?: string[]): string {
+  return `${effect}|${[...targets].sort().join(',')}|${where ? [...where].sort().join(',') : ''}|${normalise(statement)}`;
+}
+
+// The first lines of a check's output that say why, for a finding's statement.
+function excerpt(log: string): string {
+  const lines = log
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('---') && !/^(BROKEN|PARTNER|CAND|ARTICLE|BASE|MERGED|SETUP) /.test(l));
+  // node:test prints the assertion as `error: 'message'`, or as a YAML block
+  // (`error: |-`) with the message on the lines below.
+  const at = lines.findIndex((l) => /^error:/i.test(l));
+  let pick = '';
+  if (at >= 0) {
+    const inline = lines[at]!.replace(/^error:\s*/i, '');
+    pick = /^(\|-?|>-?)?$/.test(inline) ? (lines[at + 1] ?? '') : inline;
+  } else {
+    pick = lines.find((l) => /assert|charged|expected/i.test(l)) ?? lines.find((l) => /^not ok/.test(l)) ?? lines[0] ?? '';
+  }
+  const clean = pick.replace(/^['"]|['"]$/g, '');
+  return clean.length > 300 ? `${clean.slice(0, 300)}…` : clean;
 }
 
 function pushResult(row: PushRecord): PushResult {

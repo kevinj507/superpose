@@ -849,6 +849,21 @@ class LeaseKeeper {
     const fresh = recordNotices(this.dir, [...noticesAbout(index, this.id, { afterSeq: readSeenSeq(this.dir) }), ...adviceFor(index, this.id)]);
     advanceSeenSeq(this.dir, latestSeq(index));
     for (const n of fresh) this.slot.log(`notice: ${n.title}`);
+    // A claim that went stale is stale now, not at the next renewal: the
+    // marker the hooks and the agent read goes down with the notice.
+    const stale = fresh.find((n) => n.type === 'claim.stale');
+    if (stale && !hasMarker(this.dir, 'STALE') && !hasMarker(this.dir, 'DONE')) {
+      const claim = updateClaim(this.dir, { status: 'stale' });
+      this.slot.set({ state: 'stale' });
+      const left = this.expiresAt - Date.now();
+      setMarker(
+        this.dir,
+        'STALE',
+        `Claim ${this.id} is stale: ${stale.title}. Re-plan within ${formatDuration(left)} (before ${new Date(this.expiresAt).toISOString()}), or the lease runs out.`,
+      );
+      atomicWrite(join(this.dir, 'CLAIM.md'), renderClaimMd(claim, index, this.dir));
+      this.slot.log(`${this.id} is STALE; the agent has ${formatDuration(left)} to re-plan`);
+    }
   }
 
   async renew() {

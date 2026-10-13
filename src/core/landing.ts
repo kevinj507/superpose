@@ -184,7 +184,9 @@ export function mergeResult(outcome: ExecOutcome): MergeResult {
     return merge ? { status: 'merged', merge, base, log } : { status: 'error', log: `no merge commit reported\n${log}` };
   }
   if (outcome.exitCode === EXIT_MERGE_CONFLICT) {
-    const after = outcome.stdout.split('CONFLICT')[1] ?? '';
+    // The files follow the script's own bare CONFLICT line; git's "CONFLICT
+    // (content): …" lines, which it prints before, are not file names.
+    const after = outcome.stdout.split(/^CONFLICT$/m).pop() ?? '';
     const files = after.split('\n').map((l) => l.trim()).filter(Boolean);
     return { status: 'conflict', files, log };
   }

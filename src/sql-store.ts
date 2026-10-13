@@ -10,6 +10,13 @@ export class SqlStore implements Store {
       source TEXT NOT NULL, target TEXT NOT NULL, purpose TEXT NOT NULL,
       PRIMARY KEY (source, target, purpose))`);
     sql.exec(`CREATE INDEX IF NOT EXISTS edges_target ON edges (target)`);
+    // Edges gained a meta column (ordering edges carry no doubt); a graph
+    // made before then gets it here.
+    try {
+      sql.exec(`ALTER TABLE edges ADD COLUMN meta TEXT`);
+    } catch {
+      // already there
+    }
     sql.exec(`CREATE TABLE IF NOT EXISTS events (
       seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, type TEXT NOT NULL,
       claims TEXT NOT NULL, data TEXT NOT NULL)`);
@@ -44,10 +51,11 @@ export class SqlStore implements Store {
 
   addEdge(edge: Edge): void {
     this.sql.exec(
-      `INSERT OR IGNORE INTO edges (source, target, purpose) VALUES (?, ?, ?)`,
+      `INSERT OR IGNORE INTO edges (source, target, purpose, meta) VALUES (?, ?, ?, ?)`,
       edge.source,
       edge.target,
       edge.purpose,
+      edge.meta ? JSON.stringify(edge.meta) : null,
     );
   }
 
@@ -62,18 +70,18 @@ export class SqlStore implements Store {
 
   edgesFrom(id: string, purpose?: EdgePurpose): Edge[] {
     return purpose
-      ? this.edgeRows(`SELECT source, target, purpose FROM edges WHERE source = ? AND purpose = ?`, id, purpose)
-      : this.edgeRows(`SELECT source, target, purpose FROM edges WHERE source = ?`, id);
+      ? this.edgeRows(`SELECT source, target, purpose, meta FROM edges WHERE source = ? AND purpose = ?`, id, purpose)
+      : this.edgeRows(`SELECT source, target, purpose, meta FROM edges WHERE source = ?`, id);
   }
 
   edgesTo(id: string, purpose?: EdgePurpose): Edge[] {
     return purpose
-      ? this.edgeRows(`SELECT source, target, purpose FROM edges WHERE target = ? AND purpose = ?`, id, purpose)
-      : this.edgeRows(`SELECT source, target, purpose FROM edges WHERE target = ?`, id);
+      ? this.edgeRows(`SELECT source, target, purpose, meta FROM edges WHERE target = ? AND purpose = ?`, id, purpose)
+      : this.edgeRows(`SELECT source, target, purpose, meta FROM edges WHERE target = ?`, id);
   }
 
   allEdges(): Edge[] {
-    return this.edgeRows(`SELECT source, target, purpose FROM edges ORDER BY rowid`);
+    return this.edgeRows(`SELECT source, target, purpose, meta FROM edges ORDER BY rowid`);
   }
 
   appendEvent(event: Omit<GraphEvent, 'seq'>): GraphEvent {
@@ -167,8 +175,13 @@ export class SqlStore implements Store {
 
   private edgeRows(query: string, ...bindings: string[]): Edge[] {
     return this.sql
-      .exec<{ source: string; target: string; purpose: string }>(query, ...bindings)
+      .exec<{ source: string; target: string; purpose: string; meta: string | null }>(query, ...bindings)
       .toArray()
-      .map((r) => ({ source: r.source, target: r.target, purpose: r.purpose as EdgePurpose }));
+      .map((r) => ({
+        source: r.source,
+        target: r.target,
+        purpose: r.purpose as EdgePurpose,
+        ...(r.meta ? { meta: JSON.parse(r.meta) as Edge['meta'] } : {}),
+      }));
   }
 }

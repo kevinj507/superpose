@@ -279,6 +279,190 @@ describe('helpful findings', () => {
   });
 });
 
+// The constitution and the gate on pairs: what the pricing test (graph
+// shop-sp-1, 2026-10-13) showed was missing. Two claims each true to their
+// statement and tested, wrong together; nothing in the plan said what the
+// product keeps, so nothing could be checked against it.
+describe('the constitution and the gate on pairs', () => {
+  const passed = { status: 'passed' as const, exitCode: 0, startedAt: 0, finishedAt: 0 };
+  function shop() {
+    const clock = { t: 1_000_000, now() { return this.t; } };
+    let n = 0;
+    const store = new MemoryStore();
+    const engine = new Engine(store, clock, { leaseMs: LEASE, hedgeMs: HEDGE, newToken: () => `tok${++n}`, dependencyGate: 'landed', landingTimeoutMs: 600_000 });
+    store.putLine({ ...engine.line('main'), repo: { name: 'g.line.main', remote: 'x' } });
+    const article = engine.addAssumption('What you see is what you pay', { constitution: true, check: 'node --test constitution/see-is-pay.test.js' });
+    const judged = engine.addAssumption('Prices are never surprising', { constitution: true });
+    const c2 = engine.addClaim({ statement: 'pages are cached for 60 s', scope: ['src/pages.js'], orderOverlaps: false });
+    const c3 = engine.addClaim({ statement: 'prices move with demand', scope: ['src/pricing.js'], orderOverlaps: false });
+    const push = (id: string, sha: string, paths: string[]) => {
+      engine.recordPush(id, { sha, ref: 'refs/heads/main', before: null, paths, isHead: true });
+      engine.recordCheck(id, sha, passed);
+    };
+    const land = (id: string, token: string, merge: string) => {
+      engine.finish(id, token);
+      const landing = engine.beginNextLanding('main')!;
+      engine.completeLanding('main', id, { status: 'landed', merge }, landing.landing);
+      clock.t += 1000;
+    };
+    return { engine, store, clock, article, judged, c2, c3, push, land };
+  }
+
+  it('articles are listed, run when they have a check, and block no claim', () => {
+    const w = shop();
+    expect(w.engine.constitution().map((a) => a.id)).toEqual([w.article.id, w.judged.id]);
+    expect(w.engine.isReady(w.c2.id)).toBe(true);
+    expect(w.engine.isReady(w.c3.id)).toBe(true);
+    const t2 = w.engine.claim(w.c2.id, 'a2').token;
+    expect(w.engine.pairContext(w.c2.id)).toMatchObject({ skip: expect.stringContaining('no repo') });
+    w.engine.attachRepo(w.c2.id, t2, { name: 'g.claim.c2', remote: 'y' }, 'seed');
+    const ctx = w.engine.pairContext(w.c2.id);
+    expect(ctx).toMatchObject({ articles: [{ id: w.article.id, check: 'node --test constitution/see-is-pay.test.js' }], candidates: [] });
+  });
+
+  it('a broken pair files the gate\'s own finding, stales only the claims in it, and nothing finishes until it holds again', () => {
+    const w = shop();
+    // c2 forks at the seed; c3 lands after.
+    const t2 = w.engine.claim(w.c2.id, 'a2').token;
+    w.engine.attachRepo(w.c2.id, t2, { name: 'g.claim.c2', remote: 'y' }, 'seed');
+    const t3 = w.engine.claim(w.c3.id, 'a3').token;
+    w.engine.attachRepo(w.c3.id, t3, { name: 'g.claim.c3', remote: 'z' }, 'seed');
+    w.push(w.c3.id, 'sha3', ['src/pricing.js']);
+    w.land(w.c3.id, t3, 'm3');
+    expect(w.engine.pairContext(w.c2.id)).toMatchObject({ candidates: [{ claim: w.c3.id, merge: 'm3' }] });
+
+    w.push(w.c2.id, 'sha2', ['src/pages.js']);
+    expect(w.engine.beginPair(w.c2.id, 'sha2', 'run-1')).toBe(true);
+    expect(w.engine.beginPair(w.c2.id, 'sha2', 'run-1')).toBe(true); // the same run asking again
+    expect(w.engine.beginPair(w.c2.id, 'sha2', 'run-2')).toBe(false);
+    w.engine.recordPair(w.c2.id, 'sha2', {
+      status: 'broken', lineHead: 'm3', merge: 'p1', broken: [w.article.id], partner: w.c3.id,
+      log: 'ARTICLE pair a1 BROKEN\nBROKEN a1\n--- a1\nnot ok 1 - what you see is what you pay\n  error: \'purchase 2 of lamp charged $42.00, but its page showed $40.00 just before it\'\nPARTNER c2',
+      startedAt: 0, finishedAt: 1,
+    });
+    const f = w.engine.findings().find((x) => x.finder === 'gate')!;
+    expect(f).toMatchObject({ status: 'verified', effect: 'contradicts', targets: [w.article.id], where: [w.c2.id, w.c3.id] });
+    expect(f.statement).toContain(`is false where ${w.c2.id} at sha2 and ${w.c3.id} are together`);
+    expect(f.statement).toContain('purchase 2 of lamp charged $42.00, but its page showed $40.00');
+    expect(f.statement).not.toContain('error:');
+    // The article is false only in the pair: it still holds, and c3's landed work is at risk, not undone.
+    expect(w.engine.node(w.article.id)).toMatchObject({ status: 'holding' });
+    expect(w.engine.node(w.c2.id)).toMatchObject({ status: 'stale' });
+    expect(w.engine.node(w.c3.id)).toMatchObject({ status: 'landed' });
+    const events = w.engine.events();
+    expect(events.find((e) => e.type === 'claim.pair_checked')).toMatchObject({ claims: [w.c2.id], data: { status: 'broken', partner: w.c3.id, current: true } });
+    expect(events.find((e) => e.type === 'claim.stale')).toMatchObject({ claims: [w.c2.id], data: { constitution: true, where: [w.c2.id, w.c3.id], assumptions: [w.article.id] } });
+    expect(events.find((e) => e.type === 'reality.at_risk')).toMatchObject({ claims: [w.c3.id], data: { where: [w.c2.id, w.c3.id] } });
+    expect(w.engine.impactOf(f.id)).toMatchObject({ affected: [w.c2.id], landedAtRisk: [w.c3.id] });
+    // The same break reported again is not a second finding.
+    w.engine.recordPair(w.c2.id, 'sha2', { ...w.engine.pushRecord(w.c2.id, 'sha2')!.pair!, status: 'broken' });
+    expect(w.engine.findings().filter((x) => x.finder === 'gate')).toHaveLength(1);
+    // Re-planned, the claim is live again, but the head still breaks the pair: it cannot finish.
+    w.engine.replan(w.c2.id, t2, { restsOn: [] });
+    expect(w.engine.node(w.c2.id)).toMatchObject({ status: 'claimed' });
+    expect(() => w.engine.finish(w.c2.id, t2)).toThrow(/constitution/);
+    // A fix: the pair holds on the new commit, the gate's finding is resolved, and the claim finishes.
+    w.push(w.c2.id, 'sha2b', ['src/pages.js']);
+    w.engine.recordPair(w.c2.id, 'sha2b', { status: 'passed', lineHead: 'm3', merge: 'p2', startedAt: 0, finishedAt: 1 });
+    expect(w.engine.node(f.id)).toMatchObject({ status: 'resolved' });
+    expect(w.engine.events().find((e) => e.type === 'reality.restored')).toMatchObject({ claims: [w.c3.id], data: { finding: f.id, by: w.c2.id } });
+    expect(() => w.engine.finish(w.c2.id, t2)).not.toThrow();
+  });
+
+  it('a landing makes every in-flight head on the line due for a pair check again', () => {
+    const w = shop();
+    const t2 = w.engine.claim(w.c2.id, 'a2').token;
+    w.engine.attachRepo(w.c2.id, t2, { name: 'g.claim.c2', remote: 'y' }, 'seed');
+    w.push(w.c2.id, 'sha2', ['src/pages.js']);
+    // Paired with the seed: nothing to pair with, the article holds.
+    expect(w.engine.beginPair(w.c2.id, 'sha2', 'run-1')).toBe(true);
+    w.engine.recordPair(w.c2.id, 'sha2', { status: 'passed', lineHead: null, startedAt: 0, finishedAt: 1 });
+    expect(w.engine.beginPair(w.c2.id, 'sha2', 'run-2')).toBe(false); // judged against this line already
+    expect(w.engine.pairRechecks('main')).toEqual([]);
+    // c3 lands: the line moved, and c2's head is due again.
+    const t3 = w.engine.claim(w.c3.id, 'a3').token;
+    w.engine.attachRepo(w.c3.id, t3, { name: 'g.claim.c3', remote: 'z' }, 'seed');
+    w.push(w.c3.id, 'sha3', ['src/pricing.js']);
+    w.land(w.c3.id, t3, 'm3');
+    expect(w.engine.pairRechecks('main')).toEqual([{ claim: w.c2.id, sha: 'sha2', repo: 'g.claim.c2' }]);
+    expect(w.engine.beginPair(w.c2.id, 'sha2', 'run-3')).toBe(true);
+    expect(w.engine.pairRechecks('main')).toEqual([]); // running
+    w.engine.recordPair(w.c2.id, 'sha2', { status: 'broken', lineHead: 'm3', broken: [w.article.id], partner: w.c3.id, log: 'x', startedAt: 0, finishedAt: 1 });
+    expect(w.engine.node(w.c2.id)).toMatchObject({ status: 'stale' });
+    expect(w.engine.pairRechecks('main')).toEqual([]); // judged against m3
+    // A head never checked on its own, or that failed its own checks, is not paired.
+    const other = w.engine.addClaim({ statement: 'home', scope: ['src/home.js'], orderOverlaps: false });
+    const tOther = w.engine.claim(other.id, 'a5').token;
+    w.engine.attachRepo(other.id, tOther, { name: 'g.claim.c5', remote: 'q' }, 'm3');
+    w.engine.recordPush(other.id, { sha: 'sha5', ref: 'refs/heads/main', before: null, paths: ['src/home.js'], isHead: true });
+    expect(w.engine.pairRechecks('main')).toEqual([]);
+  });
+
+  it('the gate quotes the assertion itself, whether node:test prints it inline or as a block', () => {
+    const w = shop();
+    const t2 = w.engine.claim(w.c2.id, 'a2').token;
+    w.engine.attachRepo(w.c2.id, t2, { name: 'g.claim.c2', remote: 'y' }, 'seed');
+    w.push(w.c2.id, 'sha2', ['src/pages.js']);
+    w.engine.recordPair(w.c2.id, 'sha2', {
+      status: 'broken', lineHead: 'm3', broken: [w.article.id], startedAt: 0, finishedAt: 1,
+      log: 'BROKEN a1\n--- a1\nnot ok 1 - what you see is what you pay\n  ---\n  duration_ms: 12\n  failureType: \'testCodeFailure\'\n  error: |-\n    purchase 2 of lamp charged $42.00, but its page showed $40.00 just before it\n  code: \'ERR_ASSERTION\'',
+    });
+    const f = w.engine.findings().find((x) => x.finder === 'gate')!;
+    expect(f.statement).toContain(`${w.c2.id} at sha2 meets the line at m3: purchase 2 of lamp charged $42.00, but its page showed $40.00 just before it`);
+    expect(f.statement).not.toContain('|-');
+  });
+
+  it('a pair result for a commit the claim has moved past is recorded and stales nothing', () => {
+    const w = shop();
+    const t2 = w.engine.claim(w.c2.id, 'a2').token;
+    w.engine.attachRepo(w.c2.id, t2, { name: 'g.claim.c2', remote: 'y' }, 'seed');
+    w.push(w.c2.id, 'old', ['src/pages.js']);
+    w.push(w.c2.id, 'new', ['src/pages.js']);
+    w.engine.recordPair(w.c2.id, 'old', { status: 'broken', lineHead: 'm3', broken: [w.article.id], log: 'x', startedAt: 0, finishedAt: 1 });
+    expect(w.engine.pushRecord(w.c2.id, 'old')?.pair?.status).toBe('broken');
+    expect(w.engine.node(w.c2.id)).toMatchObject({ status: 'claimed' });
+    expect(w.engine.findings()).toHaveLength(0);
+    expect(w.engine.events().find((e) => e.type === 'claim.pair_checked')?.data).toMatchObject({ current: false });
+  });
+
+  it('a located contradiction from an agent reaches only the claims it names, and the assumption holds elsewhere', () => {
+    const w = shop();
+    const t2 = w.engine.claim(w.c2.id, 'a2').token;
+    const t3 = w.engine.claim(w.c3.id, 'a3').token;
+    const other = w.engine.addClaim({ statement: 'the home page', scope: ['src/home.js'], orderOverlaps: false });
+    const tOther = w.engine.claim(other.id, 'a5').token;
+    const f = w.engine.fileFinding(w.c3.id, t3, {
+      statement: 'a cached page shows a price the buyer no longer pays', effect: 'contradicts', targets: [w.article.id], where: [w.c2.id, w.c3.id],
+    }).finding;
+    expect(f.where).toEqual([w.c2.id, w.c3.id]);
+    expect(w.engine.impactOf(f.id)).toMatchObject({ affected: [w.c2.id], landedAtRisk: [] }); // the finder is left out
+    w.engine.verifyFinding(f.id);
+    expect(w.engine.node(w.article.id)).toMatchObject({ status: 'holding' });
+    expect(w.engine.node(w.c2.id)).toMatchObject({ status: 'stale' });
+    expect(w.engine.node(other.id)).toMatchObject({ status: 'claimed' });
+    expect(w.engine.renew(other.id, tOther).notices).toEqual([]);
+    expect(w.engine.renew(w.c2.id, t2).notices.map((n) => n.type)).toEqual(['claim.stale']);
+    // The same words without a where would be a different finding: a global one.
+    expect(w.engine.fileFinding(w.c3.id, t3, { statement: f.statement, effect: 'contradicts', targets: [w.article.id] }).duplicate).toBe(false);
+  });
+
+  it('doubt does not travel along an edge that only orders overlapping scopes', () => {
+    const { engine } = setup();
+    const A = engine.addAssumption('the shared format is fixed');
+    const first = engine.addClaim({ statement: 'first', scope: ['src/shared/**'], restsOn: [A.id] });
+    const second = engine.addClaim({ statement: 'second', scope: ['src/shared/a.ts'] }); // overlaps: waits for first
+    const finder = engine.addClaim({ statement: 'finder', scope: ['src/other/**'] });
+    expect(engine.isReady(second.id)).toBe(false);
+    engine.claim(first.id, 'a');
+    const tf = engine.claim(finder.id, 'b').token;
+    const f = engine.fileFinding(finder.id, tf, { statement: 'the format changed', effect: 'contradicts', targets: [A.id] }).finding;
+    expect(engine.impactOf(f.id).affected).toEqual([first.id]);
+    engine.verifyFinding(f.id);
+    expect(engine.node(first.id)).toMatchObject({ status: 'stale' });
+    expect(engine.node(second.id)).toMatchObject({ status: 'open' });
+  });
+});
+
 describe('claims, readiness and scope', () => {
   it('a claim is ready only when what it builds on is finished and what it rests on holds', () => {
     const { engine } = setup();

@@ -1,8 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { ArtifactsHost } from './artifacts-host';
-import { readCheckConfig, runCheck, type ExecJob } from './core/checks';
+import { readCheckConfig, runCheck, type CheckConfig, type ExecJob } from './core/checks';
+import { checkPair } from './core/pair';
 import { parseRepoName } from './core/repos';
-import type { CheckRun, PushRecord, RepoRef } from './core/types';
+import type { CheckRun, PairCheck, PushRecord, RepoRef } from './core/types';
 
 // An Artifacts event as the push trigger delivers it to the Workflow: the
 // whole event, with the push itself under `payload` (checked on the account
@@ -30,6 +31,30 @@ export type HandledPush =
 // runs the claim's checks on that exact commit in a Container.
 export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
   async run(event: WorkflowEvent<ArtifactsEvent>, step: WorkflowStep) {
+    const host = new ArtifactsHost(this.env.ARTIFACTS!);
+    // A landing moved the line: a head already checked on its own is paired
+    // with the line again, and only that.
+    if (event.payload.type === PAIR_RECHECK) {
+      const name = parseRepoName(event.payload.source.repoName);
+      if (!name || name.kind !== 'claim') return { ignored: `not a claim repo: ${event.payload.source.repoName}` };
+      const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(name.graph));
+      const sha = event.payload.payload.after;
+      const row = await step.do('find the commit', async () => {
+        const r = await stub.pushRow(name.id, sha);
+        return r.ok ? r.value : null;
+      });
+      if (!row?.accepted || row.verdict !== 'checks-passed') return { ignored: `${sha} is not a checked head of ${name.id}` };
+      const repo = await step.do('find the repo', async () => {
+        const r = await stub.pairContext(name.id);
+        return r.ok && !('skip' in r.value) ? r.value.claim : null;
+      });
+      if (!repo) return { ignored: `nothing to pair for ${name.id}` };
+      const config = await step.do('read the checks from the commit', () => readCheckConfig(host, repo.name, sha));
+      if (!config) return { ignored: 'no checks declared' };
+      const pair = await this.pairStep(step, host, { graph: name.graph, claim: name.id, sha, config, runId: event.instanceId });
+      return { graph: name.graph, claim: name.id, pair };
+    }
+
     const handled = await step.do(
       'check the push against its claim',
       { retries: { limit: 3, delay: '2 seconds', backoff: 'exponential' } },
@@ -45,7 +70,6 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       return r.ok ? r.value : null;
     });
     if (current !== record.sha) return { ...handled, skipped: 'superseded by a newer commit' };
-    const host = new ArtifactsHost(this.env.ARTIFACTS!);
     // Step results must be plain data, so only the verdict comes back.
     const recordCheck = async (check: CheckRun): Promise<string | null> => {
       const r = await stub.recordCheck(graph, claim, record.sha, check);
@@ -92,8 +116,67 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       run = { status: 'error', command: config.check, startedAt: now, finishedAt: now, log: String(err).slice(0, 2000) };
     }
     const verdict = await step.do('record the verdict', () => recordCheck(run));
-    return { ...handled, verdict };
+    if (verdict !== 'checks-passed') return { ...handled, verdict };
+    const pair = await this.pairStep(step, host, { graph, claim, sha: record.sha, config, runId: event.instanceId });
+    return { ...handled, verdict, pair };
   }
+
+  // The gate on combinations: the commit merged with the line as it stands,
+  // with the constitution run on the pair. A break files the gate's own
+  // finding and stales the claim; the claim's own verdict is unchanged.
+  private async pairStep(
+    step: WorkflowStep,
+    host: ArtifactsHost,
+    { graph, claim, sha, config, runId }: { graph: string; claim: string; sha: string; config: CheckConfig; runId: string },
+  ): Promise<string> {
+    const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(graph));
+    const ctx = await step.do('what the pair check needs', async () => {
+      const r = await stub.pairContext(claim);
+      return r.ok ? r.value : null;
+    });
+    if (!ctx) return 'no context';
+    if ('skip' in ctx) return ctx.skip;
+    const mine = await step.do('start the pair check, unless already running or already judged', async () => {
+      const r = await stub.beginPair(claim, sha, runId);
+      return r.ok && r.value;
+    });
+    if (!mine) return 'already running or judged for this commit and this line';
+    const runs = 1 + Math.min(8, ctx.candidates.length);
+    let pair: PairCheck;
+    try {
+      pair = await step.do(
+        'run the constitution on the commit merged with the line',
+        { retries: { limit: 2, delay: '30 seconds', backoff: 'linear' }, timeout: `${(config.timeoutSeconds * runs * 2 + 60) * 2 + 420} seconds` },
+        async (): Promise<PairCheck> => {
+          const attempt = crypto.randomUUID();
+          const exec = (job: ExecJob) => this.env.CHECKER.get(this.env.CHECKER.idFromName(`pair:${graph}:${claim}:${sha}:${attempt}`)).run(job);
+          const result = await checkPair(host, exec, { ...ctx, sha, config });
+          if (result.status === 'error') throw new Error(`the pair check could not run: ${result.log ?? ''}`.slice(0, 500));
+          return result;
+        },
+      );
+    } catch (err) {
+      const now = Date.now();
+      pair = { status: 'error', log: String(err).slice(0, 2000), startedAt: now, finishedAt: now };
+    }
+    await step.do('record the pair check', async () => {
+      const r = await stub.recordPair(claim, sha, pair);
+      return r.ok;
+    });
+    return pair.status;
+  }
+}
+
+// A pair re-check the platform asks for after a landing, in the shape the
+// push Workflow takes: the claim's repo and the head to judge again.
+export const PAIR_RECHECK = 'superpose.pair.recheck';
+
+export function pairRecheck(repoName: string, sha: string): ArtifactsEvent {
+  return {
+    type: PAIR_RECHECK,
+    source: { namespace: 'superpose', repoName },
+    payload: { ref: 'refs/heads/main', before: '0'.repeat(40), after: sha, commits: [] },
+  };
 }
 
 // Only a commit that became the claim's head, inside its scope and not yet

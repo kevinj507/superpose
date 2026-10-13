@@ -1,10 +1,15 @@
 // The Superpose graph. Edge purposes match graphtask's five so its canvas can
 // render this graph unchanged:
 //   assumption --required for--> claim     the claim rests on the assumption
-//   claim      --required for--> claim     the second builds on the first
+//   claim      --required for--> claim     the second builds on the first, or
+//                                          (meta.order) only waits for it because
+//                                          their scopes overlap: no grounding
 //   finding    --contradicts-->  assumption
 //   finding    --supports-->     claim      a helpful finding (a tool, a shortcut)
 //   claim      --supersedes-->   claim      an amended claim replaces its old version
+// What graphtask has no field for is where a contradiction holds: Superpose
+// has many realities, and "false where c2 and c3 are together" is the
+// statement it exists to make. That is `where` on a finding, not an edge.
 
 export type EdgePurpose = 'required for' | 'supports' | 'contradicts' | 'related to' | 'supersedes';
 
@@ -12,6 +17,9 @@ export interface Edge {
   source: string;
   target: string;
   purpose: EdgePurpose;
+  // order: the source only has to land before the target (overlapping
+  // scopes); doubt does not travel along it.
+  meta?: { order?: true };
 }
 
 export type ClaimStatus =
@@ -115,14 +123,23 @@ export interface Claim {
 
 export type AssumptionStatus = 'holding' | 'contradicted';
 
+// A statement something rests on. An agent's assumption is rested on by its
+// claim, through an edge. An article of the constitution is the owner's, and
+// every claim on the line rests on it by rule, with no edges: it says what
+// the product keeps whatever is built. An article with a `check` is run by
+// the gate on every push merged with the line; one without is judged.
 export interface Assumption {
   id: string;
   kind: 'assumption';
   statement: string;
   status: AssumptionStatus;
+  constitution?: boolean;
+  check?: string; // a command, run at the repo root, e.g. "node --test constitution/see-is-pay.test.js"
 }
 
-export type FindingStatus = 'unverified' | 'verified' | 'refuted';
+// resolved: the combination it was about no longer exists (the gate re-ran
+// the article on a later commit and it held); kept for the record.
+export type FindingStatus = 'unverified' | 'verified' | 'refuted' | 'resolved';
 
 export interface Finding {
   id: string;
@@ -130,8 +147,12 @@ export interface Finding {
   statement: string;
   effect: 'contradicts' | 'helps';
   status: FindingStatus;
-  finder: string; // claim id of the agent that filed it
+  finder: string; // claim id of the agent that filed it, or 'gate' for one the platform filed
   targets: string[]; // assumption ids (contradicts) or claim ids (helps)
+  // Where the contradiction holds: the claims whose combination makes the
+  // target false. Doubt reaches only them; the target itself still holds
+  // elsewhere. Absent: the target is false everywhere.
+  where?: string[];
   fingerprint: string;
   hedgeUntil: number;
 }
@@ -161,6 +182,21 @@ export interface CheckRun {
   finishedAt?: number;
 }
 
+// The gate on combinations: the commit merged with the line as it stood, with
+// the constitution's checks run on the pair. A verdict on two exact commits.
+export interface PairCheck {
+  status: 'running' | 'passed' | 'broken' | 'conflict' | 'error' | 'skipped';
+  lineHead?: string | null; // the line commit the pair was made on
+  merge?: string; // the scratch merge the checks ran on
+  broken?: string[]; // article ids that failed on the pair
+  partner?: string | null; // the landed claim the commit breaks the article with, when one was found
+  files?: string[]; // for a conflict: the files
+  log?: string;
+  runner?: string;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 export interface PushRecord {
   claim: string;
   sha: string;
@@ -176,6 +212,7 @@ export interface PushRecord {
   reason?: 'stale' | 'not-head' | 'other-branch' | 'not-claimed';
   verdict: Verdict;
   checks?: CheckRun;
+  pair?: PairCheck;
   unattributed?: string[]; // commits that do not name the claim in a trailer
 }
 
@@ -190,6 +227,8 @@ export type EventType =
   | 'claim.replanned'
   | 'scope.touched' // another claim's push changed files in this claim's scope
   | 'claim.checked' // checks finished on one of the claim's commits
+  | 'claim.pair_checked' // the constitution ran on one of the claim's commits merged with the line
+  | 'reality.restored' // a gate finding no longer holds: the combination it was about is gone
   | 'claim.ordered' // planned after an unfinished claim whose scope overlaps it
   | 'claim.landed' // merged into its line, checks passing on the merged result
   | 'claim.landing_failed' // a conflict or failing checks on the merged result: needs a decision

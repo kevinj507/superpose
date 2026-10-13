@@ -255,8 +255,25 @@ export function describeEvent(ev, ctx = {}) {
       return {
         tone: 'bad',
         icon: 'warn',
-        html: `Served reality at risk: ${chips(claimsOf, nodes)} landed on a contradicted assumption${f ? ` (${chip(f, nodes)})` : ''}`,
+        html: Array.isArray(d.where)
+          ? `Served reality at risk: the constitution is broken where ${chips(claimsOf, nodes)} and ${d.where.filter((w) => !claimsOf.includes(w)).map((w) => chip(w, nodes)).join(', ') || 'the line'} are together${f ? ` (${chip(f, nodes)})` : ''}`
+          : `Served reality at risk: ${chips(claimsOf, nodes)} landed on a contradicted assumption${f ? ` (${chip(f, nodes)})` : ''}`,
       };
+    case 'claim.pair_checked': {
+      const broken = Array.isArray(d.broken) ? d.broken : [];
+      if (d.status === 'passed') return { tone: 'ok', icon: 'check', html: `${chips(claimsOf, nodes)} merged with the line keeps the constitution` };
+      if (d.status === 'broken') {
+        return {
+          tone: 'bad',
+          icon: 'warn',
+          html: `${chips(claimsOf, nodes)} merged with the line breaks ${broken.map((a) => chip(a, nodes)).join(', ')}${typeof d.partner === 'string' ? ` together with ${chip(d.partner, nodes)}` : ''}<span class="sub">Each alone passes its checks; the pair does not. The claim is stale until it is re-planned and the article holds again.</span>`,
+        };
+      }
+      if (d.status === 'conflict') return { tone: 'bad', icon: 'warn', html: `${chips(claimsOf, nodes)} no longer merges cleanly with the line` };
+      return { tone: 'muted', icon: 'dot', html: `${chips(claimsOf, nodes)}: the pair check ${esc(String(d.status))}` };
+    }
+    case 'reality.restored':
+      return { tone: 'ok', icon: 'check', html: `The constitution holds again where ${chips(claimsOf, nodes)} ${claimsOf.length === 1 ? 'is' : 'are'}${f ? ` (${chip(f, nodes)} resolved)` : ''}` };
     default:
       return { tone: 'muted', icon: 'dot', html: `${esc(ev.type)} ${chips(claimsOf, nodes)}` };
   }

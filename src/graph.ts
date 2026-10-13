@@ -4,9 +4,9 @@ import { Coordinator, type PushReport, type Tx } from './core/coordinator';
 import { Engine, EngineError, type LandingOutcome, type NewClaim } from './core/engine';
 import { FakeRepoHost } from './core/fake-host';
 import { landingMessage } from './core/landing';
-import { syntheticPush } from './push-flow';
+import { pairRecheck, syntheticPush } from './push-flow';
 import { lineRepoName, type RepoHost } from './core/repos';
-import type { CheckRun, PushRecord } from './core/types';
+import type { CheckRun, PairCheck, PushRecord } from './core/types';
 import { SqlStore } from './sql-store';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
@@ -70,8 +70,22 @@ export class Graph extends DurableObject<Env> {
     }
   }
 
-  addAssumption(statement: string) {
-    return this.run((e) => e.addAssumption(statement));
+  addAssumption(statement: string, extra: { constitution?: boolean; check?: string } = {}) {
+    return this.run((e) => e.addAssumption(statement, extra));
+  }
+
+  // ---- the gate on pairs: the constitution on a push merged with the line ----
+
+  pairContext(id: string) {
+    return this.run((e) => e.pairContext(id));
+  }
+
+  beginPair(id: string, sha: string, owner?: string) {
+    return this.run((e) => e.beginPair(id, sha, owner));
+  }
+
+  recordPair(id: string, sha: string, pair: PairCheck) {
+    return this.run((e) => e.recordPair(id, sha, pair));
   }
 
   addClaim(input: NewClaim) {
@@ -174,7 +188,22 @@ export class Graph extends DurableObject<Env> {
   async completeLanding(graph: string, line: string, claim: string, outcome: LandingOutcome, landing?: string) {
     const r = this.run((e) => e.completeLanding(line, claim, outcome, landing));
     await this.pumpLandings(graph);
+    // The line moved: every in-flight head on it is paired with it again.
+    if (r.ok && r.value && outcome.status === 'landed') await this.startPairRechecks(line);
     return r;
+  }
+
+  private async startPairRechecks(line: string) {
+    if (this.repoHost instanceof FakeRepoHost || !this.env.PUSHES) return;
+    const due = this.run((e) => e.pairRechecks(line));
+    if (!due.ok) return;
+    for (const { repo, sha } of due.value) {
+      await this.env.PUSHES.create({ params: pairRecheck(repo, sha) }).catch(() => {});
+    }
+  }
+
+  pushRow(id: string, sha: string) {
+    return this.run((e) => e.pushRecord(id, sha) ?? null);
   }
 
   async abandonLanding(graph: string, line: string) {
@@ -329,7 +358,7 @@ export class Graph extends DurableObject<Env> {
   fileFinding(
     finder: string,
     token: string,
-    input: { statement: string; effect: 'contradicts' | 'helps'; targets: string[] },
+    input: { statement: string; effect: 'contradicts' | 'helps'; targets: string[]; where?: string[] },
   ) {
     return this.run((e) => e.fileFinding(finder, token, input));
   }

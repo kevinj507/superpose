@@ -7,8 +7,10 @@ import {
   STANDING_NOTICES,
   adviceFor,
   advanceSeenSeq,
+  describeNotice,
   indexSnapshot,
   latestSeq,
+  mustRead,
   noticesAbout,
   peekUnread,
   readNotices,
@@ -78,6 +80,49 @@ describe('what the platform said about a claim', () => {
     expect(adviceFor(index, 'c3')).toEqual([]); // nothing is addressed to it, and it rests on nothing
     expect(adviceFor(null, 'c2')).toEqual([]);
     for (const n of advice) expect(MUST_READ_NOTICES.has(n.type)).toBe(true);
+  });
+});
+
+describe('what the gate says about a pair', () => {
+  const withArticle = indexSnapshot({
+    ...snap,
+    nodes: [...snap.nodes, { id: 'a9', kind: 'assumption', status: 'holding', statement: 'What you see is what you pay.', constitution: true, check: 'node --test constitution/see-is-pay.test.js' }],
+  });
+  const ev = (type, data) => ({ seq: 9, at: 9, type, claims: ['c2'], data });
+
+  it('a broken pair must be read; a kept one is a receipt', () => {
+    const broken = describeNotice(ev('claim.pair_checked', { sha: 'a'.repeat(40), lineHead: 'b'.repeat(40), status: 'broken', broken: ['a9'], partner: 'c3', current: true }), withArticle, 'c2');
+    expect(broken.title).toContain('CONSTITUTION BROKEN');
+    expect(broken.text).toContain('What you see is what you pay.');
+    expect(broken.text).toContain('together with c3');
+    expect(mustRead({ ...broken, type: 'claim.pair_checked' })).toBe(true);
+    const kept = describeNotice(ev('claim.pair_checked', { sha: 'a'.repeat(40), lineHead: 'b'.repeat(40), status: 'passed' }), withArticle, 'c2');
+    expect(kept.title).toContain('CONSTITUTION KEPT');
+    expect(mustRead({ ...kept, type: 'claim.pair_checked' })).toBe(false);
+    const conflict = describeNotice(ev('claim.pair_checked', { sha: 'a'.repeat(40), lineHead: 'b'.repeat(40), status: 'conflict', files: ['src/pages.js'] }), withArticle, 'c2');
+    expect(conflict.title).toContain('CONFLICT WITH THE LINE');
+    expect(mustRead({ ...conflict, type: 'claim.pair_checked' })).toBe(true);
+  });
+
+  it('a stale notice from the gate says what broke, with whom, and what to do', () => {
+    const n = describeNotice(
+      ev('claim.stale', { finding: 'f9', statement: '“What you see is what you pay.” is false where c2 at abc1234 and c3 are together: purchase 2 charged $42.00', assumptions: ['a9'], where: ['c2', 'c3'], constitution: true }),
+      withArticle,
+      'c2',
+    );
+    expect(n.title).toContain('CONSTITUTION BROKEN');
+    expect(n.text).toContain('purchase 2 charged $42.00');
+    expect(n.text).toContain('with c3 “Prices follow demand.” (already landed)');
+    expect(n.text).toContain('replan --rests-on');
+    expect(n.text).toContain('WITHOUT breaking the article');
+    expect(n.text).toContain('--where c2,c3');
+    expect(mustRead({ ...n, type: 'claim.stale' })).toBe(true);
+  });
+
+  it('a plain stale notice is unchanged', () => {
+    const n = describeNotice(ev('claim.stale', { finding: 'f6', statement: 'prices move on every purchase', assumptions: ['a1'] }), withArticle, 'c2');
+    expect(n.title).toContain('STALE: an assumption under claim c2');
+    expect(n.text).toContain('Re-plan:');
   });
 });
 

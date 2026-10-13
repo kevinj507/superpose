@@ -24,9 +24,9 @@
 //                             statement contains `helps`
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { CLI, git, hasMarker, inScope, readClaim, readMarker, shortSha, sleep } from './lib.mjs';
+import { CLI, git, hasMarker, inScope, readClaim, readMarker, readNotices, shortSha, sleep } from './lib.mjs';
 
 const dir = process.cwd();
 const claim = readClaim(dir);
@@ -140,12 +140,30 @@ if (rule) {
   }
 }
 
+// The gate found the claim's commit breaks the constitution together with
+// the line: what a real agent does by thought, scripted. The note no longer
+// says "worked on", so the article holds on the pair again.
+function keepTheConstitution() {
+  const text = readFileSync(join(dir, file), 'utf8');
+  if (!/worked on/.test(text)) return false;
+  writeFileSync(join(dir, file), text.replaceAll('worked on', 'touched'));
+  return true;
+}
+
+const constitutionBroken = () => /CONSTITUTION|constitution/i.test(`${readMarker(dir, 'STALE') ?? ''}\n${readNotices(dir).map((n) => n.title).join('\n')}`);
+
 let replanned = false;
 for (let waited = 0; waited < hold; waited++) {
   if (!replanned && hasMarker(dir, 'STALE')) {
     say(`The claim went stale: ${(readMarker(dir, 'STALE') ?? '').trim()}`);
-    edit(file, `${claim.agent} kept working after the claim went stale`);
-    const sha = commit(file, `More work on ${claim.claim}`);
+    const forConstitution = constitutionBroken();
+    if (forConstitution) {
+      say('The constitution is broken on the pair: keeping it, then re-planning');
+      keepTheConstitution();
+    } else {
+      edit(file, `${claim.agent} kept working after the claim went stale`);
+    }
+    const sha = commit(file, forConstitution ? `Keep the constitution on ${claim.claim}` : `More work on ${claim.claim}`);
     r = push();
     say(r.code === 0 ? `Unexpected: the push of ${shortSha(sha)} went through while stale` : `The pre-push hook refused ${shortSha(sha)}, as it should:\n${r.stderr.trim()}`);
     if (!replan()) break;
@@ -163,5 +181,22 @@ if (finished.code !== 0 && /not read yet/.test(finished.out)) {
   // reads them first. A scripted one has nothing to change.
   finished = superpose(['done']);
   say(finished.out);
+}
+if (finished.code !== 0 && /breaks the constitution/.test(finished.out) && !replanned) {
+  // The pair check came back while done was waiting: keep the constitution,
+  // re-plan, push, and finish.
+  say('The gate refused to finish: keeping the constitution, then re-planning');
+  keepTheConstitution();
+  const sha = commit(file, `Keep the constitution on ${claim.claim}`);
+  if (replan()) {
+    r = push();
+    say(r.code === 0 ? `Pushed ${shortSha(sha)} after re-planning` : `Push after re-planning failed:\n${r.stderr.trim()}`);
+    finished = superpose(['done']);
+    say(finished.out);
+    if (finished.code !== 0 && /not read yet/.test(finished.out)) {
+      finished = superpose(['done']);
+      say(finished.out);
+    }
+  }
 }
 process.exitCode = finished.code === 0 ? 0 : 1;

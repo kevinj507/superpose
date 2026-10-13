@@ -42,12 +42,15 @@ const EXIT = { pass: 0, fail: 1, error: 2 };
 const CACHING = ['cache', 'fast-pages'];
 const PRICING = ['dynamic-pricing', 'buying-moves-price'];
 
+// visible: whether npm test (the claims' tests and the constitution together)
+// passes. The naive combination fails it: the constitution's "what you see is
+// what you pay" is the hidden test made visible, and only the pair breaks it.
 export const VARIANTS = [
-  { name: 'seed', layers: [], hidden: 'pass' },
-  { name: 'caching only', layers: [{ overlay: 'naive', claims: CACHING }], hidden: 'pass', oneGroup: true },
-  { name: 'pricing only', layers: [{ overlay: 'naive', claims: PRICING }], hidden: 'pass', oneGroup: true },
-  { name: 'naive', layers: [{ overlay: 'naive' }], hidden: 'fail' },
-  { name: 'integrated', layers: [{ overlay: 'integrated' }], hidden: 'pass' },
+  { name: 'seed', layers: [], hidden: 'pass', visible: true },
+  { name: 'caching only', layers: [{ overlay: 'naive', claims: CACHING }], hidden: 'pass', visible: true, oneGroup: true },
+  { name: 'pricing only', layers: [{ overlay: 'naive', claims: PRICING }], hidden: 'pass', visible: true, oneGroup: true },
+  { name: 'naive', layers: [{ overlay: 'naive' }], hidden: 'fail', visible: 'constitution' },
+  { name: 'integrated', layers: [{ overlay: 'integrated' }], hidden: 'pass', visible: true },
   { name: 'no handle', layers: [], replace: { 'src/app.js': 'export const nothing = true;\n' }, visible: false, hidden: 'error' },
 ];
 
@@ -121,6 +124,11 @@ async function npmTest(dir) {
   return { ok: r.code === 0, code: r.code, tests: count('tests'), pass: count('pass'), fail: count('fail'), failing, tail: `${r.out}${r.err}`.slice(-1500) };
 }
 
+// Only the constitution's own test fails: the claims' tests all pass.
+function onlyConstitutionFailed(visible) {
+  return visible.failing.length > 0 && visible.failing.every((name) => /what you see is what you pay/.test(name));
+}
+
 async function hiddenCheck(dir) {
   const r = await run(process.execPath, [CHECK, dir], dir);
   const last = r.out.trim().split('\n').at(-1) ?? '';
@@ -140,8 +148,11 @@ async function runVariant(v, plan, quick) {
     for (const [path, text] of Object.entries(v.replace ?? {})) writeFileSync(join(dir, path), text);
     const skipVisible = v.visible === false || (quick && v.oneGroup);
     const [visible, hidden] = await Promise.all([skipVisible ? null : npmTest(dir), hiddenCheck(dir)]);
-    const ok = (visible === null || visible.ok) && hidden.verdict === v.hidden && hidden.code === EXIT[v.hidden];
-    return { name: v.name, expected: v.hidden, visible, hidden, ok };
+    // 'constitution': the visible tests must fail, and only the constitution's.
+    const visibleOk =
+      visible === null ? true : v.visible === 'constitution' ? !visible.ok && visible.fail > 0 && onlyConstitutionFailed(visible) : visible.ok;
+    const ok = visibleOk && hidden.verdict === v.hidden && hidden.code === EXIT[v.hidden];
+    return { name: v.name, expected: v.hidden, expectedVisible: v.visible, visible, hidden, ok };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -157,7 +168,10 @@ export async function validateShopScenario({ quick = false } = {}) {
 function print(report) {
   const out = ['The shop scenario, built from the seed and the reference work:', ''];
   for (const v of report.variants) {
-    const visible = v.visible === null ? 'npm test: not run' : `npm test: ${v.visible.ok ? 'pass' : 'FAIL'} (${v.visible.pass}/${v.visible.tests})`;
+    const visible =
+      v.visible === null
+        ? 'npm test: not run'
+        : `npm test: ${v.visible.ok ? 'pass' : v.expectedVisible === 'constitution' ? 'fail (constitution)' : 'FAIL'} (${v.visible.pass}/${v.visible.tests})`;
     const mark = v.ok ? 'ok ' : 'BAD';
     out.push(`${mark} ${v.name.padEnd(13)} ${visible.padEnd(26)} hidden: ${v.hidden.verdict} (exit ${v.hidden.code}), expected ${v.expected}`);
     out.push(`      ${v.hidden.detail}`);

@@ -1,0 +1,24 @@
+{
+  "name": "pair-rehearsal",
+  "description": "Two notes files and one article of the constitution that only the pair breaks: each file may say an agent worked on it, but not both. For rehearsing the gate on combinations with scripted agents, no model needed.",
+  "constitution": [
+    {
+      "key": "one-worker",
+      "statement": "At most one of notes/a.txt and notes/b.txt says that an agent worked on it.",
+      "check": "node --test constitution/one-worker.test.js"
+    }
+  ],
+  "assumptions": [],
+  "claims": [
+    {
+      "key": "note-a",
+      "statement": "notes/a.txt carries a line from the agent that worked on it.",
+      "scope": ["notes/a.txt"]
+    },
+    {
+      "key": "note-b",
+      "statement": "notes/b.txt carries a line from the agent that worked on it.",
+      "scope": ["notes/b.txt"]
+    }
+  ]
+}
