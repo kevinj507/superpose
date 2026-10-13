@@ -24,7 +24,10 @@ import {
   CMD,
   REPO_DIR,
   RUNNER_DIR,
+  STANDING_NOTICES,
   UsageError,
+  adviceFor,
+  advanceSeenSeq,
   agentEnv,
   atomicWrite,
   canvasUrl,
@@ -32,6 +35,9 @@ import {
   clearMarker,
   describeNotice,
   explainError,
+  latestSeq,
+  noticesAbout,
+  readSeenSeq,
   formatDuration,
   git,
   gitAsync,
@@ -72,6 +78,8 @@ const USAGE = `Usage: node runner/run.mjs --graph <gid> [options]
                          takes one when nothing is ready, and re-plans it first)
   --max-attempts <n>     take the same claim at most this many times in one run (default 2)
   --renew-every <s>      renew leases this often (default: a third of the lease, at most 60 s)
+  --poll-every <s>       read the graph this often for notices to the claims held, so an agent
+                         hears within seconds rather than at the next renewal (default 10)
   --patience <s>         stop waiting for claims to become ready after this long without
                          any change in the graph (default 600)
   --name <prefix>        agent names are <prefix>-1, <prefix>-2, ... (default: the agent kind)
@@ -97,6 +105,7 @@ const OPTIONS = {
   'skip-stale': { type: 'boolean' },
   'max-attempts': { type: 'string', default: '2' },
   'renew-every': { type: 'string' },
+  'poll-every': { type: 'string', default: '10' },
   patience: { type: 'string', default: '600' },
   name: { type: 'string' },
   url: { type: 'string' },
@@ -524,13 +533,15 @@ class Slot {
       takenAt: Date.now(),
     };
     writeClaim(dir, claim);
-    atomicWrite(stateFile(dir, 'NOTICES.md'), `# Notices for claim ${grant.id} (newest first)\n\nNone yet. The runner adds to this file at every lease renewal.\n`);
+    atomicWrite(stateFile(dir, 'NOTICES.md'), `# Notices for claim ${grant.id} (newest first)\n\nNone yet. The runner adds to this file as the platform speaks.\n`);
     const index = await this.runner.snapshot({ maxAgeMs: 0 });
+    // Whoever takes a claim hears what was said about it before: a finding
+    // filed to help it while it was open, a push into its scope, why it went
+    // stale. Verdicts on old pushes are left out; the poll carries what comes next.
+    const earlier = [...noticesAbout(index, grant.id, { types: STANDING_NOTICES }), ...adviceFor(index, grant.id)];
+    for (const n of recordNotices(dir, earlier)) this.log(`${grant.id} starts with a notice: ${n.title}`);
+    advanceSeenSeq(dir, latestSeq(index));
     if (grant.status === 'stale') {
-      // The renewals only carry what happens from now on; tell the new holder
-      // why the claim went stale before it was taken.
-      const why = (index?.events ?? []).filter((e) => e.type === 'claim.stale' && e.claims.includes(grant.id));
-      recordNotices(dir, why.map((e) => describeNotice(e, index, grant.id)));
       setMarker(
         dir,
         'STALE',
@@ -792,12 +803,17 @@ class LeaseKeeper {
     const leaseMs = Math.max(60_000, grant.expiresAt - Date.now());
     const every = Number(slot.opts.renewEvery) * 1000;
     this.interval = every > 0 ? every : Math.min(60_000, Math.max(5_000, leaseMs / 3));
+    this.pollInterval = Math.max(2_000, (Number(slot.opts.pollEvery) || 10) * 1000);
     this.stopped = false;
   }
 
   start() {
-    this.slot.log(`renewing the lease on ${this.id} every ${formatDuration(this.interval)} (it runs ${formatDuration(this.expiresAt - Date.now())} at a time)`);
+    this.slot.log(
+      `renewing the lease on ${this.id} every ${formatDuration(this.interval)} (it runs ${formatDuration(this.expiresAt - Date.now())} at a time); ` +
+        `reading the graph for notices every ${formatDuration(this.pollInterval)}`,
+    );
     this.schedule(this.interval);
+    this.schedulePoll();
   }
 
   schedule(ms) {
@@ -805,9 +821,34 @@ class LeaseKeeper {
     this.timer = setTimeout(() => this.renew().finally(() => this.schedule(this.next ?? this.interval)), ms);
   }
 
+  schedulePoll() {
+    if (this.stopped) return;
+    this.pollTimer = setTimeout(() => this.poll().finally(() => this.schedulePoll()), this.pollInterval);
+  }
+
   stop() {
     this.stopped = true;
     clearTimeout(this.timer);
+    clearTimeout(this.pollTimer);
+  }
+
+  // A renewal replaces the git token, so it happens once a minute; a notice
+  // cannot wait that long. Between renewals the graph is read (a public
+  // snapshot the agents share, no token involved) for anything new said
+  // about this claim, and for advice filed for it that no checker has ruled
+  // on yet. Whatever the renewal brings later is recognised and not repeated.
+  async poll() {
+    if (this.stopped || hasMarker(this.dir, 'DONE') || hasMarker(this.dir, 'RELEASED')) return;
+    let index;
+    try {
+      index = await this.runner.snapshot({ maxAgeMs: this.pollInterval / 2 });
+    } catch {
+      return;
+    }
+    if (!index || this.stopped) return;
+    const fresh = recordNotices(this.dir, [...noticesAbout(index, this.id, { afterSeq: readSeenSeq(this.dir) }), ...adviceFor(index, this.id)]);
+    advanceSeenSeq(this.dir, latestSeq(index));
+    for (const n of fresh) this.slot.log(`notice: ${n.title}`);
   }
 
   async renew() {
@@ -830,9 +871,8 @@ class LeaseKeeper {
       }
       if (v.notices?.length) {
         const index = await this.runner.snapshot({ maxAgeMs: 0 });
-        const described = v.notices.map((n) => describeNotice(n, index, this.id));
-        recordNotices(this.dir, described);
-        for (const n of described) this.slot.log(`notice: ${n.title}`);
+        // The poll usually got here first; only what it missed is new.
+        for (const n of recordNotices(this.dir, v.notices.map((n) => describeNotice(n, index, this.id)))) this.slot.log(`notice: ${n.title}`);
       }
       if (v.ok) {
         this.expiresAt = v.expiresAt;
@@ -994,6 +1034,7 @@ async function main() {
       skipStale: !!values['skip-stale'],
       maxAttempts: Number(values['max-attempts']) || 2,
       renewEvery: values['renew-every'],
+      pollEvery: Number(values['poll-every']) || 10,
       patience: Number(values.patience) || 600,
       name: values.name || values.agent,
       workDir: resolve(values.work ?? join(REPO_DIR, 'work')),

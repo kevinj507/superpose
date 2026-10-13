@@ -20,7 +20,10 @@ import { parseArgs } from 'node:util';
 import {
   Api,
   CMD,
+  MUST_READ_NOTICES,
   UsageError,
+  adviceFor,
+  advanceSeenSeq,
   changedSince,
   claimContext,
   clearMarker,
@@ -30,12 +33,16 @@ import {
   git,
   hasMarker,
   indexSnapshot,
+  latestSeq,
   localNotice,
+  noticesAbout,
   outOfScope,
+  peekUnread,
   quoteStatement,
   readClaim,
   readMarker,
   readNotices,
+  readSeenSeq,
   recordNotices,
   renderClaimMd,
   atomicWrite,
@@ -48,6 +55,17 @@ import {
   updateClaim,
   writeGitAuth,
 } from './lib.mjs';
+
+// Bring the working copy's notices up to the graph as it is now: events
+// addressed to the claim since the last read, and advice filed for it that
+// no checker has ruled on. The runner does the same every few seconds; here
+// it happens at the moments that matter most, `status` and `done`.
+function pullNotices(dir, claim, index) {
+  if (!index) return [];
+  const fresh = recordNotices(dir, [...noticesAbout(index, claim.claim, { afterSeq: readSeenSeq(dir) }), ...adviceFor(index, claim.claim)]);
+  advanceSeenSeq(dir, latestSeq(index));
+  return fresh;
+}
 
 const USAGE = `Usage: ${CMD} <command> [options]
 
@@ -163,6 +181,11 @@ async function status({ dir, claim, api }, values) {
     // The brief lists the other work in this reality, which changes as others work.
     atomicWrite(`${dir}/CLAIM.md`, renderClaimMd(claim, index, dir));
     out.push('CLAIM.md is refreshed: it lists the other work in this reality and what each piece rests on.');
+    const fresh = pullNotices(dir, claim, index);
+    if (fresh.length) {
+      out.push(`New notices (also in .superpose/NOTICES.md):`);
+      for (const n of fresh) out.push(`  ${n.title}\n    ${n.text.replace(/\n/g, '\n    ')}`);
+    }
     out.push('Rests on:');
     if (ctx.restsOn.length) for (const a of ctx.restsOn) out.push(`  ${a.id}  ${a.status.padEnd(12)} ${a.statement}`);
     else out.push('  (no assumptions declared)');
@@ -338,6 +361,18 @@ async function done({ dir, claim, api }, values) {
   refuseIfOver(dir, claim.claim);
   if (hasMarker(dir, 'STALE')) {
     throw new Refused(`Claim ${claim.claim} is stale, so it cannot be finished. Re-plan first (see .superpose/NOTICES.md).`);
+  }
+  // Nothing is finished past what the platform said about it. Anything the
+  // agent has not yet been shown is shown now, once; the next `done` goes on.
+  pullNotices(dir, claim, await snapshotIndex(api));
+  const unread = peekUnread(dir, 'agent').filter((n) => MUST_READ_NOTICES.has(n.type));
+  if (unread.length) {
+    takeUnread(dir, 'agent');
+    throw new Refused(
+      `Superpose told this claim things you have not read yet:\n\n` +
+        unread.map((n) => `## ${n.title}\n${n.text}`).join('\n\n') +
+        `\n\nRead them. If they change what the work must do, change it, commit and push. If they change nothing, run \`${CMD} done\` again.`,
+    );
   }
   const dirty = dirtyFiles(dir);
   if (dirty.length) {

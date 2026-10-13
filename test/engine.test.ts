@@ -259,6 +259,24 @@ describe('helpful findings', () => {
     expect(w.engine.renew(w.eightyEight[4]!, t(w.eightyEight[4]!)).notices).toEqual([]);
     expect(w.engine.claims().filter((c) => c.status === 'stale')).toHaveLength(0);
   });
+
+  it('filed for a claim nobody holds yet, they reach whoever takes it first', () => {
+    const { engine } = setup();
+    const finder = engine.addClaim({ statement: 'pricing', scope: ['src/pricing.js'] });
+    const open = engine.addClaim({ statement: 'pages', scope: ['src/pages.js'] });
+    const finderToken = engine.claim(finder.id, 'agent-1').token;
+    const f = engine.fileFinding(finder.id, finderToken, {
+      statement: 'a cached page keeps showing the old price after a buy', effect: 'helps', targets: [open.id],
+    }).finding;
+    engine.verifyFinding(f.id);
+    const token = engine.claim(open.id, 'agent-2').token;
+    const r = engine.renew(open.id, token);
+    expect(r.ok).toBe(true);
+    expect(r.notices.map((n) => n.type)).toEqual(['claim.helped']);
+    expect(r.notices[0]!.data).toMatchObject({ finding: f.id });
+    // Heard once: the next renewal carries nothing new.
+    expect(engine.renew(open.id, token).notices).toEqual([]);
+  });
 });
 
 describe('claims, readiness and scope', () => {

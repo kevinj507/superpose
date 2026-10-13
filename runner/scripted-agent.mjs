@@ -19,7 +19,9 @@
 //   SUPERPOSE_SCRIPTED_FINDINGS  JSON list of {when, contradicts, statement}: a claim whose
 //                             statement contains `when` files a finding against the assumption
 //                             it rests on whose statement contains `contradicts`, the way a
-//                             real agent reports what it discovered (used by the playground)
+//                             real agent reports what it discovered (used by the playground);
+//                             or {when, helps, statement}: it files advice for the claim whose
+//                             statement contains `helps`
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
@@ -125,9 +127,14 @@ if (rule) {
   try {
     const res = await fetch(`${claim.url}/api/graphs/${claim.graph}/snapshot`);
     const snap = await res.json();
-    const mine = new Set(snap.edges.filter((e) => e.target === claim.claim && e.purpose === 'required for').map((e) => e.source));
-    const target = snap.nodes.find((n) => n.kind === 'assumption' && mine.has(n.id) && n.statement.includes(rule.contradicts));
-    if (target) say(superpose(['finding', '--contradicts', target.id, rule.statement]).out);
+    if (typeof rule.helps === 'string') {
+      const other = snap.nodes.find((n) => n.kind === 'claim' && n.id !== claim.claim && n.statement.includes(rule.helps));
+      if (other) say(superpose(['finding', '--helps', other.id, rule.statement]).out);
+    } else {
+      const mine = new Set(snap.edges.filter((e) => e.target === claim.claim && e.purpose === 'required for').map((e) => e.source));
+      const target = snap.nodes.find((n) => n.kind === 'assumption' && mine.has(n.id) && n.statement.includes(rule.contradicts));
+      if (target) say(superpose(['finding', '--contradicts', target.id, rule.statement]).out);
+    }
   } catch (err) {
     say(`Could not file the scripted finding: ${err}`);
   }
@@ -149,6 +156,12 @@ for (let waited = 0; waited < hold; waited++) {
   await sleep(1000);
 }
 
-const finished = superpose(['done']);
+let finished = superpose(['done']);
 say(finished.out);
+if (finished.code !== 0 && /not read yet/.test(finished.out)) {
+  // `done` shows unread notices once and asks to be run again; a real agent
+  // reads them first. A scripted one has nothing to change.
+  finished = superpose(['done']);
+  say(finished.out);
+}
 process.exitCode = finished.code === 0 ? 0 : 1;

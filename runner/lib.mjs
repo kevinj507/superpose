@@ -336,9 +336,23 @@ export function readNotices(dir) {
 }
 
 // Add notices (already described in plain English) and rewrite NOTICES.md.
+// A notice can reach the working copy more than once (the lease renewal and
+// the poll both carry platform events; advice is re-read at every poll), so
+// one already recorded, by its event seq or its key, is skipped. Returns the
+// ones that were new.
 export function recordNotices(dir, entries) {
-  if (!entries.length) return;
-  const all = [...readNotices(dir), ...entries];
+  const have = readNotices(dir);
+  const keyOf = (n) => n.key ?? (n.seq != null ? `seq:${n.seq}` : null);
+  const known = new Set(have.map(keyOf).filter(Boolean));
+  const fresh = [];
+  for (const n of entries) {
+    const k = keyOf(n);
+    if (k && known.has(k)) continue;
+    if (k) known.add(k);
+    fresh.push(n);
+  }
+  if (!fresh.length) return [];
+  const all = [...have, ...fresh];
   atomicWrite(stateFile(dir, 'notices.json'), JSON.stringify(all, null, 2) + '\n');
   const claim = readJson(stateFile(dir, 'claim.json'), {});
   const lines = [
@@ -352,6 +366,7 @@ export function recordNotices(dir, entries) {
     lines.push(`## ${all.length - i}. ${n.title}  (${new Date(n.at).toISOString().slice(11, 19)} UTC)`, '', n.text, '');
   });
   atomicWrite(stateFile(dir, 'NOTICES.md'), lines.join('\n'));
+  return fresh;
 }
 
 // Notices not yet shown on one channel ('push' for the pre-push hook, 'agent'
@@ -364,6 +379,84 @@ export function takeUnread(dir, channel) {
   if (from >= all.length) return [];
   atomicWrite(seenFile, JSON.stringify({ ...seen, [channel]: all.length }) + '\n');
   return all.slice(from);
+}
+
+// The same, without marking them shown.
+export function peekUnread(dir, channel) {
+  const all = readNotices(dir);
+  const from = readJson(stateFile(dir, 'seen.json'), {})[channel] ?? 0;
+  return all.slice(from);
+}
+
+// The last platform event the working copy has been brought up to, so a
+// poll asks only for what came after. Kept in its own file: the runner and
+// the CLI both move it, and the larger value always wins.
+export function readSeenSeq(dir) {
+  return Number(readMarker(dir, 'seen-seq')) || 0;
+}
+
+export function advanceSeenSeq(dir, seq) {
+  if (seq > readSeenSeq(dir)) setMarker(dir, 'seen-seq', String(seq));
+}
+
+export function latestSeq(index) {
+  return (index?.events ?? []).reduce((m, e) => Math.max(m, e.seq ?? 0), 0);
+}
+
+// ---- what the platform has said about a claim --------------------------------------
+//
+// A running agent hears platform events two ways: the lease renewal carries
+// the ones since the last renewal, and the runner's poll reads the graph for
+// anything newer than the seen seq. Whoever takes a claim also hears what was
+// said about it before: the kinds below stand until acted on (verdicts on
+// old pushes do not, so they are left out of that first read).
+
+export const STANDING_NOTICES = new Set(['claim.helped', 'claim.stale', 'scope.touched', 'claim.landing_failed', 'reality.at_risk']);
+
+// What agents must not finish without having read: everything the platform
+// says about the work itself, as opposed to receipts for their own actions.
+export const MUST_READ_NOTICES = new Set([...STANDING_NOTICES, 'local.advice', 'local.doubt']);
+
+// The events addressed to one claim, described, newest last.
+export function noticesAbout(index, claimId, { afterSeq = 0, types = null } = {}) {
+  return (index?.events ?? [])
+    .filter((e) => e.seq > afterSeq && (e.claims ?? []).includes(claimId) && (!types || types.has(e.type)))
+    .map((e) => describeNotice(e, index, claimId));
+}
+
+// Findings addressed to a claim before any checker has ruled on them: advice
+// filed to help it, and doubts cast on an assumption it rests on. Nobody is
+// stopped by an unverified finding, but the agent it concerns should know it
+// exists; a verified one arrives again as a platform event.
+export function adviceFor(index, claimId) {
+  if (!index) return [];
+  const restsOn = new Set(claimContext(index, claimId).restsOn.map((a) => a.id));
+  const out = [];
+  for (const f of index.nodes.values()) {
+    if (f.kind !== 'finding' || f.status !== 'unverified' || f.finder === claimId) continue;
+    if (f.effect === 'helps' && f.targets.includes(claimId)) {
+      out.push({
+        key: `finding:${f.id}`,
+        type: 'local.advice',
+        at: Date.now(),
+        title: `ADVICE: claim ${f.finder} filed finding ${f.id} for this claim (not yet verified)`,
+        text: `“${f.statement}”\nA checker has not ruled on it yet, so weigh it yourself. If it is right and changes what your work must do, act on it now rather than after you have built on the old view.`,
+      });
+    } else if (f.effect === 'contradicts') {
+      const doubted = f.targets.filter((a) => restsOn.has(a));
+      if (!doubted.length) continue;
+      out.push({
+        key: `finding:${f.id}`,
+        type: 'local.doubt',
+        at: Date.now(),
+        title: `DOUBT: claim ${f.finder} says an assumption this claim rests on is false (finding ${f.id}, not yet verified)`,
+        text:
+          `It contradicts ${doubted.map((a) => `${a} ${quoteStatement(index.nodes.get(a))}`).join('; ')}: “${f.statement}”\n` +
+          'Nothing stops until a checker verifies it. If you can see that it is right, do not build further on that assumption.',
+      });
+    }
+  }
+  return out;
 }
 
 // ---- scope ------------------------------------------------------------------------------
@@ -541,6 +634,24 @@ export function trailerClaims(message) {
   return out;
 }
 
+// The findings that concern one claim, for its brief: those filed to help it,
+// and those that contradict an assumption it rests on (with the doubted
+// assumptions attached), oldest first.
+export function findingsAbout(index, claimId) {
+  const restsOn = new Map(claimContext(index, claimId).restsOn.map((a) => [a.id, a]));
+  const out = [];
+  for (const f of index.nodes.values()) {
+    if (f.kind !== 'finding' || f.finder === claimId) continue;
+    if (f.effect === 'helps') {
+      if (f.targets.includes(claimId)) out.push({ ...f, doubted: [] });
+    } else {
+      const doubted = f.targets.filter((a) => restsOn.has(a)).map((a) => restsOn.get(a));
+      if (doubted.length) out.push({ ...f, doubted });
+    }
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+}
+
 // ---- CLAIM.md -----------------------------------------------------------------------------------
 
 // The brief an agent works from: what to make true, where it may write, what
@@ -597,6 +708,25 @@ export function renderClaimMd(claim, index, dir) {
       lines.push(`- \`${c.id}\` (${where}): ${c.statement}`);
     }
     lines.push('', 'Use that work as it is; if it is missing or wrong, file a finding rather than changing its files.', '');
+  }
+  // What other agents have already said about this claim: findings filed to
+  // help it, and doubts cast on what it rests on. The first thing to read,
+  // since it is what others saw coming for this work.
+  const told = index ? findingsAbout(index, id) : [];
+  if (told.length) {
+    lines.push('## What others have told this claim', '');
+    for (const f of told) {
+      const state = f.status === 'verified' ? 'verified' : f.status === 'refuted' ? 'refuted by a checker' : 'filed, not yet verified';
+      const about = f.effect === 'helps' ? '' : ` It says this is false: ${f.doubted.map((a) => `\`${a.id}\` “${a.statement}”`).join('; ')}.`;
+      lines.push(`- \`${f.id}\` from \`${f.finder}\` (${state}): ${f.statement}${about}`);
+    }
+    lines.push(
+      '',
+      'Read these before you plan. If one of them means your work would be wrong, or would make other work wrong,',
+      'change the approach now, or file a finding, rather than building on the old view. More arrive in',
+      '`.superpose/NOTICES.md` while you work.',
+      '',
+    );
   }
   // The rest of the work in this claim's reality: its line's other claims,
   // and the landed work the line carries from the line it was forked from.

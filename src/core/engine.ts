@@ -252,13 +252,16 @@ export class Engine {
     if (c.line !== 'main' && !this.store.getLine(c.line)) {
       throw new EngineError('no_line', `line ${c.line} does not exist yet; create it before claiming work on it`);
     }
-    // The new holder hears what the previous one had not heard yet (checks
-    // that failed, a landing that conflicted); a claim never held starts now.
+    // What was said about a claim belongs to the claim, not to a lease. The
+    // new holder hears what the previous one had not heard yet (checks that
+    // failed, a landing that conflicted), and the first holder hears
+    // everything said while the claim was open: a finding filed to help it,
+    // a push into its scope.
     const lease = {
       holder: agent,
       token: this.newToken(),
       expiresAt: now + this.opts.leaseMs,
-      cursor: c.lease?.cursor ?? c.deliveredSeq ?? this.latestSeq(),
+      cursor: c.lease?.cursor ?? c.deliveredSeq ?? 0,
     };
     const status = c.status === 'stale' ? 'stale' : 'claimed';
     if (status === 'stale') {
