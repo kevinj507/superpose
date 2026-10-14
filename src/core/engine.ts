@@ -6,9 +6,12 @@ import type {
   CheckRun,
   Claim,
   ClaimStatus,
+  Decision,
   EventType,
   Finding,
+  FindingEvidence,
   GraphNode,
+  GraphEvent,
   KeptBranch,
   LandingState,
   Lease,
@@ -76,18 +79,19 @@ export interface NewClaim {
   // Set false to let it run beside unfinished claims whose scope overlaps
   // (a planner that wants competing changes to the same files).
   orderOverlaps?: boolean;
+  hedgeOn?: string;
 }
 
 export interface RenewResult {
   ok: boolean;
-  reason?: 'stale';
+  reason?: 'stale' | 'hedge-expired';
   expiresAt?: number;
   notices: Notice[];
 }
 
 export interface PushResult {
   accepted: boolean;
-  reason?: 'stale';
+  reason?: 'stale' | 'hedge-expired';
   verdict?: 'in-scope' | 'scope-violation';
   outside?: string[];
 }
@@ -137,16 +141,79 @@ export class Engine {
 
   // The constitution: the owner's standing statements, which every claim on
   // the line rests on by rule.
-  constitution(): Assumption[] {
-    return this.store.allNodes().filter((n): n is Assumption => n.kind === 'assumption' && !!n.constitution && n.status === 'holding');
+  constitution(line?: string): Assumption[] {
+    const inherited = line ? this.store.getLine(line)?.articles : undefined;
+    return this.store.allNodes().filter((n): n is Assumption => n.kind === 'assumption' && !!n.constitution &&
+      n.status === 'holding' && !n.supersededBy && (!line || !n.supersededOn?.[line]) &&
+      (!line || n.line === line || (inherited ? inherited.includes(n.id) : !n.line)));
+  }
+
+  proposeArticle(id: string, token: string, input: { statement: string; check?: string; checkFile?: string; replaces?: string }): Assumption {
+    const c = this.held(id, token);
+    const statement = input.statement.trim();
+    if (!statement || statement.length > 4000) throw new EngineError('bad_request', 'an article needs a statement of at most 4000 characters');
+    if (input.checkFile && !constitutionPath(input.checkFile)) throw new EngineError('bad_request', 'a proposed check file must be under constitution/');
+    if (input.replaces && !this.assumption(input.replaces).constitution) throw new EngineError('bad_request', 'only a constitutional article can be amended');
+    const proposal: Assumption = {
+      ...this.addAssumption(statement), line: c.line,
+      ...(input.check ? { check: input.check } : {}),
+      ...(input.checkFile ? { checkFile: input.checkFile } : {}),
+      ...(input.replaces ? { replaces: input.replaces } : {}),
+      proposal: { by: id, at: this.clock.now() },
+    };
+    this.store.putNode(proposal);
+    this.store.addEdge({ source: proposal.id, target: id, purpose: 'related to' });
+    this.emit('article.proposed', [id], { article: proposal.id, statement, line: c.line });
+    return proposal;
+  }
+
+  adoptArticle(id: string, input: { check?: string; checkFile?: string; atSha?: string; judged?: boolean }): Assumption {
+    const a = this.assumption(id);
+    if (!a.proposal || a.proposal.resolution) throw new EngineError('settled', `article ${id} is not awaiting adoption`);
+    if (this.line(a.line ?? 'main').landing) throw new EngineError('busy', 'wait for the current landing before changing the constitution');
+    const check = input.judged ? undefined : input.check?.trim() || a.check;
+    const checkFile = check ? input.checkFile || a.checkFile : undefined;
+    if (check && (!checkFile || !constitutionPath(checkFile) || !input.atSha)) {
+      throw new EngineError('bad_request', 'adoption needs a check file already on the owner-controlled line under constitution/');
+    }
+    const adopted: Assumption = {
+      ...a, constitution: true, check, checkFile,
+      proposal: { ...a.proposal, resolution: 'adopted', ...(input.atSha ? { atSha: input.atSha } : {}) },
+    };
+    if (a.replaces) {
+      const previous = this.assumption(a.replaces);
+      if (!previous.constitution || previous.supersededBy || previous.supersededOn?.[a.line ?? 'main']) {
+        throw new EngineError('settled', 'the article this proposal amends is no longer active');
+      }
+      if (!this.constitution(a.line ?? 'main').some((article) => article.id === previous.id)) throw new EngineError('bad_request', 'the amended article must belong to this line');
+      this.store.putNode({
+        ...previous, supersededOn: { ...previous.supersededOn, [a.line ?? 'main']: id },
+      });
+      this.store.addEdge({ source: id, target: previous.id, purpose: 'supersedes' });
+    }
+    this.store.putNode(adopted);
+    this.emit('article.adopted', this.claims().filter((c) => c.line === a.line && c.status !== 'superseded').map((c) => c.id),
+      { article: id, line: a.line, statement: a.statement, replaces: a.replaces ?? null });
+    return adopted;
+  }
+
+  rejectArticle(id: string, reason: string): Assumption {
+    const a = this.assumption(id);
+    if (!a.proposal || a.proposal.resolution) throw new EngineError('settled', `article ${id} is not awaiting adoption`);
+    if (!reason.trim()) throw new EngineError('bad_request', 'rejection needs a reason');
+    const next: Assumption = { ...a, proposal: { ...a.proposal, resolution: 'rejected', reason: reason.trim() } };
+    this.store.putNode(next);
+    this.emit('article.rejected', [a.proposal.by], { article: id, reason: reason.trim() });
+    return next;
   }
 
   addClaim(input: NewClaim): Claim {
     if (!validScope(input.scope)) throw new EngineError('bad_request', 'a scope is 1 to 64 patterns of at most 256 characters');
     for (const id of input.restsOn ?? []) {
-      if (this.assumption(id).status !== 'holding') throw new EngineError('contradicted', `assumption ${id} is contradicted`);
+      if (!this.assumptionHolds(this.assumption(id), input.line ?? 'main')) throw new EngineError('contradicted', `assumption ${id} is contradicted or not an accepted basis for this line`);
     }
     const line = input.line ?? 'main';
+    if (input.hedgeOn) this.finding(input.hedgeOn);
     for (const id of input.requires ?? []) {
       const dep = this.claimNode(id);
       if (dep.line !== line && !(this.store.getLine(line)?.inherits ?? []).includes(id)) {
@@ -165,6 +232,7 @@ export class Engine {
       pushes: 0,
       kept: [],
       version: 1,
+      ...(input.hedgeOn ? { hedgeOn: input.hedgeOn } : {}),
     };
     this.store.putNode(c);
     for (const a of input.restsOn ?? []) this.store.addEdge({ source: a, target: c.id, purpose: 'required for' });
@@ -221,9 +289,9 @@ export class Engine {
       const known = this.store
         .allNodes()
         .filter((n): n is Assumption => n.kind === 'assumption' && normalise(n.statement) === key);
-      a = known.find((n) => n.status === 'holding') ?? known[0] ?? this.addAssumption(statement);
+      a = known.find((n) => this.assumptionHolds(n, this.claimNode(id).line)) ?? known.find((n) => !n.proposal) ?? this.addAssumption(statement);
     }
-    if (a.status !== 'holding') throw new EngineError('contradicted', `assumption ${a.id} is contradicted`);
+    if (!this.assumptionHolds(a, this.claimNode(id).line)) throw new EngineError('contradicted', `assumption ${a.id} is contradicted or not an accepted basis for this line`);
     this.store.addEdge({ source: a.id, target: id, purpose: 'required for' });
     return a;
   }
@@ -231,10 +299,11 @@ export class Engine {
   isReady(id: string): boolean {
     const c = this.claimNode(id);
     if (c.status !== 'open') return false;
+    if (!this.hedgePermitted(c)) return false;
     return this.store.edgesTo(id, 'required for').every((e) => {
       const src = this.store.getNode(e.source);
       if (!src) return false;
-      if (src.kind === 'assumption') return src.status === 'holding';
+      if (src.kind === 'assumption') return this.assumptionHolds(src, c.line);
       if (src.kind === 'claim') return this.depMet(c, src);
       return true;
     });
@@ -263,6 +332,7 @@ export class Engine {
     agent: string,
   ): { token: string; expiresAt: number; status: ClaimStatus; revoke: string[]; revokeLine?: Lease['lineToken'] } {
     const c = this.claimNode(id);
+    if (!this.hedgePermitted(c)) throw new EngineError('hedge_expired', 'the investigation needs an owner decision');
     const now = this.clock.now();
     const free = !c.lease || c.lease.expiresAt <= now;
     // A claim whose landing is in flight is not taken over: the landing's
@@ -340,6 +410,7 @@ export class Engine {
   // carries every event about this claim since the agent last asked. A stale
   // claim's lease is not extended until the agent re-plans.
   renew(id: string, token: string): RenewResult {
+    this.expireHedges();
     const c = this.held(id, token);
     const lease = c.lease!;
     const notices = this.store
@@ -347,6 +418,10 @@ export class Engine {
       .filter((e) => e.claims.includes(id))
       .map((e) => ({ seq: e.seq, type: e.type, data: e.data }));
     const cursor = this.latestSeq();
+    if (!this.hedgePermitted(c)) {
+      this.store.putNode({ ...c, lease: { ...lease, cursor } });
+      return { ok: false, reason: 'hedge-expired', notices };
+    }
     if (c.status === 'stale') {
       this.store.putNode({ ...c, lease: { ...lease, cursor } });
       return { ok: false, reason: 'stale', notices };
@@ -518,8 +593,19 @@ export class Engine {
   finish(id: string, token: string): { revoke: string[]; revokeLine?: Lease['lineToken'] } {
     const c = this.held(id, token);
     if (c.status === 'stale') throw new EngineError('stale', `claim ${id} is stale; re-plan first`);
+    if (!this.hedgePermitted(c)) throw new EngineError('hedge_expired', 'the investigation needs an owner decision before more work can be accepted');
+    if (this.store.edgesTo(id, 'required for').some((edge) => {
+      const premise = this.store.getNode(edge.source);
+      return premise?.kind === 'assumption' && !this.assumptionHolds(premise, c.line);
+    })) {
+      throw new EngineError('contradicted', 'a premise of this claim was withdrawn; re-plan before finishing');
+    }
     // Nothing is finished that breaks the constitution together with the line.
     const head = c.headSha ? this.store.getPush(id, c.headSha) : undefined;
+    if (head && this.constitution(c.line).some((a) => a.check && a.proposal) &&
+      (head.pair?.status !== 'passed' || !this.pairArticlesMatch(id, head.pair))) {
+      throw new EngineError('constitution_pending', 'check this code against the newly adopted constitution before finishing');
+    }
     if (head?.pair?.status === 'broken') {
       throw new EngineError('constitution', `commit ${c.headSha} breaks the constitution together with the line (${(head.pair.broken ?? []).join(', ')}); fix it or re-plan first`);
     }
@@ -552,7 +638,7 @@ export class Engine {
 
   // A new line forked from another: the second option of a decision, say.
   // It carries the work landed on its source so far.
-  addLine(input: { name: string; from: string; repo: RepoRef; head?: string; decision?: string; option?: string }): Line {
+  addLine(input: { name: string; from: string; repo: RepoRef; head?: string; decision?: string; option?: string; sharing?: Line['sharing']; group?: string }): Line {
     if (this.store.getLine(input.name)) throw new EngineError('exists', `line ${input.name} exists`);
     const source = this.line(input.from);
     if (source.landing) throw new EngineError('busy', `a landing is in progress on ${input.from}; try again in a moment`);
@@ -564,19 +650,25 @@ export class Engine {
       served: false,
       from: input.from,
       inherits: [...(source.inherits ?? []), ...carried],
+      articles: this.constitution(input.from).map((a) => a.id),
     };
     if (input.decision) line.decision = input.decision;
     if (input.option) line.option = input.option;
+    line.sharing = input.sharing ?? source.sharing ?? 'project';
+    if (line.sharing === 'isolated') line.group = input.group ?? (input.sharing === 'isolated' ? input.name : source.group ?? input.name);
     if (!this.store.getLine(input.from)) this.store.putLine(source);
     this.store.putLine(line);
     return line;
   }
 
   // Say which option of which decision an existing line is.
-  labelLine(name: string, labels: { decision?: string; option?: string }): Line {
+  labelLine(name: string, labels: { decision?: string; option?: string; sharing?: Line['sharing']; group?: string }): Line {
     const line = { ...this.line(name) };
     if (labels.decision !== undefined) line.decision = labels.decision;
     if (labels.option !== undefined) line.option = labels.option;
+    if (labels.sharing !== undefined) line.sharing = labels.sharing;
+    if (labels.group !== undefined) line.group = labels.group;
+    if (line.sharing === 'isolated' && !line.group) line.group = name;
     this.store.putLine(line);
     return line;
   }
@@ -610,6 +702,7 @@ export class Engine {
   landable(id: string): boolean {
     const c = this.claimNode(id);
     if (c.status !== 'done') return false;
+    if (!this.hedgePermitted(c)) return false;
     const retryable = c.landing?.status === 'error' && (c.landing.attempts ?? 1) < 3;
     if (c.landing && c.landing.status !== 'queued' && !retryable) return false;
     if (c.headSha) {
@@ -742,23 +835,32 @@ export class Engine {
     const c = this.held(id, token);
     // Re-planning is how a stale claim gets back to work. A claim that is not
     // stale keeps the scope and assumptions it was frozen with.
-    if (c.status !== 'stale') throw new EngineError('not_stale', `claim ${id} is not stale; only a stale claim re-plans`);
+    const withdrawn = this.store.edgesTo(id, 'required for').some((e) => {
+      const a = this.store.getNode(e.source);
+      return a?.kind === 'assumption' && !this.assumptionHolds(a, c.line);
+    });
+    if (c.status !== 'stale' && !withdrawn) throw new EngineError('not_stale', `claim ${id} is not stale; only a stale claim re-plans`);
     if (change.scope && !validScope(change.scope)) throw new EngineError('bad_request', 'a scope is 1 to 64 patterns of at most 256 characters');
     for (const a of change.restsOn) {
-      if (this.assumption(a).status !== 'holding') {
+      if (!this.assumptionHolds(this.assumption(a), c.line)) {
         throw new EngineError('contradicted', `assumption ${a} is contradicted`);
       }
     }
+    const revision: Claim = { ...c, id: this.store.nextId('r'), status: 'superseded', lease: undefined, landing: undefined };
+    this.store.putNode(revision);
+    for (const edge of this.store.edgesTo(id, 'required for')) this.store.addEdge({ ...edge, target: revision.id });
     for (const e of this.store.edgesTo(id, 'required for')) {
       if (this.store.getNode(e.source)?.kind === 'assumption') this.store.removeEdge(e);
     }
     for (const a of change.restsOn) this.store.addEdge({ source: a, target: id, purpose: 'required for' });
+    this.store.addEdge({ source: id, target: revision.id, purpose: 'supersedes' });
     const next: Claim = {
       ...c,
       statement: change.statement ?? c.statement,
       scope: change.scope ?? c.scope,
       status: 'claimed',
       version: c.version + 1,
+      hedgeOn: c.hedgeOn && this.finding(c.hedgeOn).status === 'refuted' ? undefined : c.hedgeOn,
       lease: { ...c.lease!, expiresAt: this.clock.now() + this.opts.leaseMs },
     };
     this.store.putNode(next);
@@ -775,6 +877,9 @@ export class Engine {
     input: { statement: string; effect: 'contradicts' | 'helps'; targets: string[]; where?: string[] },
   ): { finding: Finding; duplicate: boolean } {
     this.held(finderId, token);
+    if (!input.statement.trim() || input.statement.length > 4000 || !input.targets.length || input.targets.length > 16) {
+      throw new EngineError('bad_request', 'a finding needs a statement and one to sixteen targets');
+    }
     for (const t of input.targets) {
       if (input.effect === 'contradicts') this.assumption(t);
       else this.claimNode(t);
@@ -782,7 +887,8 @@ export class Engine {
     // Where a contradiction holds: named claims, only for a contradiction.
     const where = input.effect === 'contradicts' && input.where?.length ? [...new Set(input.where)] : undefined;
     for (const w of where ?? []) this.claimNode(w);
-    const fingerprint = fingerprintOf(input.statement, input.effect, input.targets, where);
+    const origin = this.line(this.claimNode(finderId).line);
+    const fingerprint = (origin.sharing === 'isolated' ? `${origin.group ?? origin.name}|` : '') + fingerprintOf(input.statement, input.effect, input.targets, where);
     const existing = this.findings().find((f) => f.fingerprint === fingerprint);
     if (existing) return { finding: existing, duplicate: true };
     const f: Finding = {
@@ -796,6 +902,8 @@ export class Engine {
       ...(where ? { where } : {}),
       fingerprint,
       hedgeUntil: this.clock.now() + this.opts.hedgeMs,
+      at: this.clock.now(),
+      line: this.claimNode(finderId).line,
     };
     this.store.putNode(f);
     const purpose = input.effect === 'contradicts' ? 'contradicts' : 'supports';
@@ -818,7 +926,7 @@ export class Engine {
       ? f.where.map((id) => this.store.getNode(id)).filter((n): n is Claim => n?.kind === 'claim' && n.status !== 'open')
       : this.downstreamOf(f.targets);
     for (const c of reached) {
-      if (c.id === f.finder || c.status === 'superseded') continue;
+      if (c.status === 'superseded' || !this.findingVisibleTo(f, c.line) || (c.id === f.finder && f.evidence?.status !== 'confirmed')) continue;
       if (c.status === 'landed') landedAtRisk.push(c.id);
       else {
         affected.push(c.id);
@@ -831,16 +939,23 @@ export class Engine {
   verifyFinding(findingId: string): Impact {
     const f = this.finding(findingId);
     if (f.status !== 'unverified') throw new EngineError('settled', `finding ${f.id} is ${f.status}`);
+    if (f.effect === 'contradicts' && f.targets.some((id) => {
+      const a = this.assumption(id);
+      return a.proposal && a.proposal.resolution !== 'adopted';
+    })) throw new EngineError('bad_request', 'a proposed article supplies advice until the owner adopts it');
+    if (f.effect === 'contradicts' && !f.where?.length && f.targets.some((id) => this.assumption(id).constitution)) {
+      throw new EngineError('bad_request', 'name where the article fails; amending a promise is an owner decision');
+    }
     const impact = this.impactOf(findingId);
     this.store.putNode({ ...f, status: 'verified' });
     this.emit('finding.verified', [f.finder], { finding: f.id });
 
     if (f.effect === 'helps') {
-      this.emit('claim.helped', f.targets, { finding: f.id, statement: f.statement });
+      this.emit('claim.helped', f.targets.filter((id) => this.findingVisibleTo(f, this.claimNode(id).line)), { finding: f.id, statement: f.statement });
       return impact;
     }
     // A located contradiction leaves the target holding everywhere else.
-    if (!f.where) {
+    if (!f.where && this.line(f.line ?? this.findingLine(f)).sharing !== 'isolated') {
       for (const a of f.targets) {
         const node = this.assumption(a);
         if (node.status === 'holding') this.store.putNode({ ...node, status: 'contradicted' });
@@ -872,22 +987,22 @@ export class Engine {
     }
   }
 
-  // A refuted finding is kept, so the next agent to suspect the same thing is
-  // pointed at it. The finder's work built on it is parked and it re-plans.
+  // Refutation preserves useful work. Only a claim explicitly resting on
+  // the suspicion is parked; reporting a suspicion is not that commitment.
   refuteFinding(findingId: string): void {
     const f = this.finding(findingId);
     if (f.status !== 'unverified') throw new EngineError('settled', `finding ${f.id} is ${f.status}`);
     this.store.putNode({ ...f, status: 'refuted' });
-    const finder = this.claimNode(f.finder);
-    if (finder.status === 'claimed' || finder.status === 'done' || finder.status === 'open') {
-      const kept = finder.headSha
-        ? [...finder.kept, { sha: finder.headSha, reason: `finding ${f.id} refuted`, at: this.clock.now() }]
-        : finder.kept;
-      const landing = finder.landing?.status === 'landing' ? finder.landing : undefined;
-      this.store.putNode({ ...finder, status: 'stale', kept, landing });
-      this.emit('claim.stale', [f.finder], { finding: f.id, statement: f.statement, refuted: true });
-    }
+    this.parkRefutedHedges(f);
     this.emit('finding.refuted', [f.finder], { finding: f.id });
+  }
+
+  private parkRefutedHedges(f: Finding) {
+    for (const c of this.claims().filter((c) => c.hedgeOn === f.id && ['claimed', 'done', 'open'].includes(c.status))) {
+      const kept = c.headSha ? [...c.kept, { sha: c.headSha, reason: `finding ${f.id} refuted`, at: this.clock.now() }] : c.kept;
+      this.store.putNode({ ...c, status: 'stale', kept });
+      this.emit('claim.stale', [c.id], { finding: f.id, statement: f.statement, refuted: true });
+    }
   }
 
   // Unverified findings past their hedge window need a human decision. The
@@ -900,8 +1015,142 @@ export class Engine {
         .eventsSince(0)
         .some((e) => e.type === 'finding.hedge_expired' && e.data.finding === f.id);
       if (!already) this.emit('finding.hedge_expired', [f.finder], { finding: f.id });
+      if (!f.decision) {
+        const d: Decision = {
+          id: this.store.nextId('d'), kind: 'decision', status: 'review', finding: f.id,
+          statement: `Continue investigating finding ${f.id}, or park the investigation?`,
+          deadline: f.hedgeUntil, defaultAction: 'park-investigation',
+        };
+        this.store.putNode(d);
+        this.store.putNode({ ...f, decision: d.id });
+        this.store.addEdge({ source: d.id, target: f.id, purpose: 'related to' });
+        this.emit('decision.opened', [f.finder, ...this.claims().filter((c) => c.hedgeOn === f.id).map((c) => c.id)], { decision: d.id, finding: f.id, defaultAction: d.defaultAction });
+      }
     }
     return expired;
+  }
+
+  decide(id: string, answer: Decision['answer'], reason: string): Decision {
+    const d = this.store.getNode(id);
+    if (d?.kind !== 'decision') throw new EngineError('not_found', `no decision ${id}`);
+    if (d.status === 'done') throw new EngineError('settled', `decision ${id} is already answered`);
+    if (!answer || !['park-investigation', 'continue-investigation'].includes(answer) || !reason.trim()) {
+      throw new EngineError('bad_request', 'choose whether to continue or park, and record the reason');
+    }
+    const next: Decision = { ...d, status: 'done', answer, reason: reason.trim() };
+    this.store.putNode(next);
+    const f = this.finding(d.finding);
+    if (answer === 'continue-investigation' && f.status === 'unverified') {
+      this.store.putNode({ ...f, hedgeUntil: this.clock.now() + this.opts.hedgeMs, decision: undefined });
+    }
+    this.emit('decision.answered', [f.finder, ...this.claims().filter((c) => c.hedgeOn === f.id).map((c) => c.id)], { decision: id, finding: f.id, answer, reason: reason.trim() });
+    return next;
+  }
+
+  publishFinding(id: string, lines: string[]): Finding {
+    const f = this.finding(id);
+    if (!lines.length) throw new EngineError('bad_request', 'name the lines that may receive this finding');
+    for (const line of lines) if (!this.store.getLine(line) && line !== 'main') throw new EngineError('not_found', `no line ${line}`);
+    const publishedTo = [...new Set([...(f.publishedTo ?? []), ...lines])];
+    const newly = lines.filter((line) => !f.publishedTo?.includes(line));
+    if (!newly.length) return f;
+    const next: Finding = { ...f, publishedTo };
+    this.store.putNode(next);
+    const relevant = f.effect === 'helps' ? f.targets.map((t) => this.claimNode(t)) :
+      f.where ? f.where.map((t) => this.claimNode(t)) : this.downstreamOf(f.targets);
+    const recipients = relevant.filter((c) => newly.includes(c.line)).map((c) => c.id);
+    this.emit('finding.shared', recipients, { finding: id, statement: f.statement, status: f.status, lines: newly });
+    if (f.status === 'verified' && f.effect === 'contradicts') this.applyDoubt(next, this.impactOf(id));
+    if (f.status === 'verified' && f.effect === 'helps') this.emit('claim.helped', recipients, { finding: id, statement: f.statement });
+    return next;
+  }
+
+  findingVisibleTo(f: Finding, line: string): boolean {
+    if (f.publishedTo?.includes(line)) return true;
+    const origin = this.line(f.line ?? this.findingLine(f));
+    const destination = this.line(line);
+    if (origin.name === line) return true;
+    if (origin.sharing !== 'isolated' && destination.sharing !== 'isolated') return true;
+    return origin.sharing === 'isolated' && destination.sharing === 'isolated' && (origin.group ?? origin.name) === (destination.group ?? line);
+  }
+
+  private findingLine(f: Finding): string {
+    const source = this.store.getNode(f.finder);
+    return source?.kind === 'claim' ? source.line : f.where?.length ? this.claimNode(f.where[0]!).line : 'main';
+  }
+
+  private assumptionHolds(a: Assumption, line: string): boolean {
+    if (a.supersededBy || a.supersededOn?.[line] || (a.proposal && a.proposal.resolution !== 'adopted')) return false;
+    if (a.status === 'contradicted' && !this.findings().some((f) => f.status === 'verified' && f.targets.includes(a.id) && !this.findingVisibleTo(f, line))) return false;
+    return !this.findings().some((f) => f.status === 'verified' && !f.where && f.effect === 'contradicts' && f.targets.includes(a.id) && this.findingVisibleTo(f, line));
+  }
+
+  private hedgePermitted(c: Claim): boolean {
+    if (!c.hedgeOn) return true;
+    const f = this.finding(c.hedgeOn);
+    if (f.status === 'refuted') return c.status === 'stale'; // lease takeover permits re-planning, never another accepted push
+    return f.status !== 'unverified' || f.hedgeUntil > this.clock.now();
+  }
+
+  private pairArticlesMatch(id: string, pair: PairCheck): boolean {
+    const articles = this.constitution(this.claimNode(id).line).filter((a) => a.check);
+    if (!pair.articles) return !articles.some((a) => a.proposal);
+    return JSON.stringify([...pair.articles].sort()) === JSON.stringify(articles.map((a) => a.id).sort());
+  }
+
+  beginFindingCheck(id: string, lineHead: string): {
+    finding: string; evidence: FindingEvidence; line: RepoRef;
+    heads: { claim: string; sha: string; repo: RepoRef }[];
+    articles: { id: string; check: string }[];
+  } {
+    const f = this.finding(id);
+    if (f.status !== 'unverified' || f.effect !== 'contradicts') throw new EngineError('settled', 'only an unverified contradiction can be checked');
+    if (!f.where?.length || f.where.length > 8) throw new EngineError('bad_request', 'mechanical verification needs one to eight claims in where');
+    const lineName = f.line ?? this.findingLine(f);
+    const line = this.line(lineName);
+    if (!line.repo || !lineHead) throw new EngineError('no_repo', 'the line needs code before this finding can be checked');
+    const active = this.constitution(lineName);
+    const articles = f.targets.map((target) => {
+      const a = active.find((a) => a.id === target);
+      if (!a?.check) throw new EngineError('bad_request', 'this finding needs owner judgment: every target must be an active executable article');
+      return { id: a.id, check: a.check };
+    });
+    const heads = f.where.map((claim) => {
+      const c = this.claimNode(claim);
+      if (c.line !== lineName && !line.inherits?.includes(claim)) throw new EngineError('bad_request', 'where must name code belonging to this reality');
+      if (!c.headSha || !c.repo || c.status === 'superseded') throw new EngineError('no_repo', `claim ${claim} has no current code to check`);
+      return { claim, sha: c.headSha, repo: c.repo };
+    });
+    const evidence: FindingEvidence = { status: 'running', line: lineName, lineHead,
+      heads: heads.map(({ claim, sha }) => ({ claim, sha })), articles, at: this.clock.now() };
+    if (f.evidence?.status === 'running' && this.clock.now() - f.evidence.at < 45 * 60_000) throw new EngineError('busy', 'this finding is already being checked');
+    this.store.putNode({ ...f, evidence });
+    return { finding: id, evidence, line: line.repo, heads, articles };
+  }
+
+  recordFindingCheck(id: string, evidence: FindingEvidence): Finding {
+    const f = this.finding(id);
+    if (f.status !== 'unverified') return f;
+    const currentRun = f.evidence?.status === 'running' && f.evidence.at === evidence.at &&
+      f.evidence.lineHead === evidence.lineHead &&
+      JSON.stringify(f.evidence.heads) === JSON.stringify(evidence.heads) &&
+      JSON.stringify(f.evidence.articles) === JSON.stringify(evidence.articles);
+    // A delayed result cannot overwrite a newer check or its verdict.
+    if (!currentRun) return f;
+    const same =
+      evidence.heads.every(({ claim, sha }) => this.claimNode(claim).headSha === sha) &&
+      evidence.articles.every(({ id, check }) => this.constitution(evidence.line).some((a) => a.id === id && a.check === check));
+    const recorded: FindingEvidence = same ? evidence : { ...evidence, status: 'inconclusive', log: 'The checked inputs changed; this result cannot settle the finding.' };
+    const next: Finding = { ...f, evidence: recorded };
+    this.store.putNode(next);
+    this.emit('finding.checked', [f.finder], { finding: id, status: recorded.status, lineHead: recorded.lineHead, heads: recorded.heads, articles: recorded.articles, log: recorded.log ?? '' });
+    if (recorded.status === 'confirmed') this.verifyFinding(id);
+    if (recorded.status === 'refuted') {
+      this.store.putNode({ ...next, status: 'refuted' });
+      this.parkRefutedHedges(f);
+      this.emit('finding.refuted', [f.finder], { finding: id, evidence: true });
+    }
+    return this.finding(id);
   }
 
   // ---- reads -----------------------------------------------------------------
@@ -962,6 +1211,56 @@ export class Engine {
     return this.store.allNodes().map(forDisplay);
   }
 
+  contextFor(id: string, token: string) {
+    const viewer = this.held(id, token);
+    const destination = this.line(viewer.line);
+    const allowedLines = new Set(this.lines().filter((line) => line.name === destination.name ||
+      (line.sharing !== 'isolated' && destination.sharing !== 'isolated') ||
+      (line.sharing === 'isolated' && destination.sharing === 'isolated' && (line.group ?? line.name) === (destination.group ?? destination.name))).map((line) => line.name));
+    allowedLines.add(viewer.line);
+    const claims = this.claims().filter((c) => allowedLines.has(c.line));
+    const claimIds = new Set(claims.map((c) => c.id));
+    const assumptionIds = new Set(this.store.allNodes().filter((n) => n.kind === 'assumption' &&
+      (this.constitution(viewer.line).some((a) => a.id === n.id) || this.store.edgesFrom(n.id, 'required for').some((e) => claimIds.has(e.target)))).map((n) => n.id));
+    const findings = this.findings().filter((f) => this.findingVisibleTo(f, viewer.line) &&
+      (f.status !== 'unverified' || f.finder === id || viewer.hedgeOn === f.id || f.publishedTo?.includes(viewer.line)));
+    const findingIds = new Set(findings.map((f) => f.id));
+    const nodes = this.nodesForDisplay().filter((n) => n.kind === 'claim' ? claimIds.has(n.id) :
+      n.kind === 'assumption' ? assumptionIds.has(n.id) || (n.proposal?.by === id) :
+      n.kind === 'finding' ? findingIds.has(n.id) : findingIds.has(n.finding));
+    return this.snapshotSelection(nodes.map((n) => n.kind === 'assumption' && (!n.proposal || n.proposal.resolution === 'adopted') ? { ...n, status: this.assumptionHolds(n, viewer.line) ? 'holding' as const : 'contradicted' as const } : n),
+      this.lines().filter((line) => allowedLines.has(line.name)), this.events().filter((event) => event.claims.includes(id)));
+  }
+
+  publicContext() {
+    const hiddenClaims = new Set(this.claims().filter((c) => this.line(c.line).sharing === 'isolated').map((c) => c.id));
+    const nodes = this.nodesForDisplay().filter((n) => {
+      if (n.kind === 'claim') return !hiddenClaims.has(n.id);
+      if (n.kind === 'finding') return (n.status !== 'unverified' && this.line(n.line ?? this.findingLine(n)).sharing !== 'isolated') || n.publishedTo?.some((line) => this.line(line).sharing !== 'isolated');
+      if (n.kind === 'decision') {
+        const f = this.finding(n.finding);
+        return (f.status !== 'unverified' && this.line(f.line ?? this.findingLine(f)).sharing !== 'isolated') ||
+          f.publishedTo?.some((line) => this.line(line).sharing !== 'isolated');
+      }
+      return (!n.line || this.line(n.line).sharing !== 'isolated') &&
+        (!this.store.edgesFrom(n.id, 'required for').length || this.store.edgesFrom(n.id, 'required for').some((e) => !hiddenClaims.has(e.target)));
+    });
+    const ids = new Set(nodes.map((n) => n.id));
+    return this.snapshotSelection(nodes, this.lines().filter((line) => line.sharing !== 'isolated'),
+      this.events().filter((event) => typeof event.data.finding === 'string' && !ids.has(event.data.finding) ? false : event.claims.length ? event.claims.some((id) => !hiddenClaims.has(id)) :
+        typeof event.data.line === 'string' ? this.line(event.data.line).sharing !== 'isolated' :
+        typeof event.data.claim === 'string' ? ids.has(event.data.claim) :
+        typeof event.data.article === 'string' ? ids.has(event.data.article) : false));
+  }
+
+  private snapshotSelection(nodes: GraphNode[], lines: Line[], events: GraphEvent[]) {
+    const ids = new Set(nodes.map((node) => node.id));
+    return { nodes, lines, events,
+      edges: this.store.allNodes().flatMap((n) => this.store.edgesFrom(n.id)).filter((e) => ids.has(e.source) && ids.has(e.target)),
+      pushes: this.store.pushes().filter((row) => ids.has(row.claim)),
+    };
+  }
+
   readyForDisplay(): GraphNode[] {
     return this.ready().map(forDisplay);
   }
@@ -970,6 +1269,7 @@ export class Engine {
 
   private rejection(c: Claim, input: { ref: string; isHead: boolean; seenAt: number }): PushRecord['reason'] {
     if (input.ref !== MAIN) return 'other-branch';
+    if (!this.hedgePermitted(c)) return 'hedge-expired';
     if (c.status === 'stale') return 'stale';
     if (c.status !== 'claimed') return 'not-claimed';
     // Two inspections in flight: the one that read the repo later wins, so
@@ -1004,7 +1304,7 @@ export class Engine {
       .edgesTo(c.id, 'required for')
       .some((e) => {
         const src = this.store.getNode(e.source);
-        return src?.kind === 'assumption' && src.status !== 'holding';
+        return src?.kind === 'assumption' && !this.assumptionHolds(src, c.line);
       });
     return contradicted ? 'stale' : 'open';
   }
@@ -1093,7 +1393,7 @@ export class Engine {
   // point (the work its head meets), oldest first.
   pairContext(id: string): PairContext {
     const c = this.claimNode(id);
-    const articles = this.constitution()
+    const articles = this.constitution(c.line)
       .filter((a) => a.check)
       .map((a) => ({ id: a.id, check: a.check!, statement: a.statement }));
     if (!articles.length) return { skip: 'the constitution has no executable articles' };
@@ -1121,7 +1421,7 @@ export class Engine {
     if (row.pair && row.pair.status !== 'running') {
       const lineHead = this.line(this.claimNode(id).line).head ?? null;
       const judgedAgainst = row.pair.lineHead ?? null;
-      if (row.pair.status === 'skipped' || judgedAgainst === lineHead) return false;
+      if ((row.pair.status === 'skipped' || judgedAgainst === lineHead) && this.pairArticlesMatch(id, row.pair)) return false;
     }
     this.store.putPush({ ...row, pair: { status: 'running', startedAt: now, ...(owner ? { runner: owner } : {}) } });
     return true;
@@ -1137,8 +1437,8 @@ export class Engine {
       if (!(c.status === 'claimed' || c.status === 'stale' || c.status === 'done')) continue;
       if (c.landing?.status === 'landing') continue;
       const row = this.store.getPush(c.id, c.headSha);
-      if (!row?.accepted || row.verdict !== 'checks-passed') continue;
-      if (row.pair && (row.pair.status === 'running' || row.pair.status === 'skipped' || (row.pair.lineHead ?? null) === head)) continue;
+      if (!row?.accepted || (row.verdict !== 'checks-passed' && row.checks?.status !== 'skipped')) continue;
+      if (row.pair && (row.pair.status === 'running' || ((row.pair.status === 'skipped' || (row.pair.lineHead ?? null) === head) && this.pairArticlesMatch(c.id, row.pair)))) continue;
       out.push({ claim: c.id, sha: c.headSha, repo: c.repo.name });
     }
     return out;
@@ -1156,7 +1456,8 @@ export class Engine {
     this.store.putPush(next);
     if (pair.status === 'running') return next;
     const c = this.claimNode(id);
-    const current = c.headSha === sha;
+    const current = c.headSha === sha && this.pairArticlesMatch(id, pair) &&
+      (pair.lineHead === undefined || this.line(c.line).head === undefined || pair.lineHead === this.line(c.line).head);
     this.emit('claim.pair_checked', [id], {
       sha,
       status: pair.status,
@@ -1191,6 +1492,8 @@ export class Engine {
       where,
       fingerprint,
       hedgeUntil: this.clock.now(),
+      at: this.clock.now(),
+      line: this.claimNode(id).line,
     };
     this.store.putNode(f);
     for (const t of f.targets) this.store.addEdge({ source: f.id, target: t, purpose: 'contradicts' });
@@ -1245,6 +1548,10 @@ function normalise(statement: string): string {
   return statement.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+export function constitutionPath(path: string): boolean {
+  return path.startsWith('constitution/') && !path.includes('\\') && !path.split('/').some((part) => !part || part === '.' || part === '..');
+}
+
 function fingerprintOf(statement: string, effect: string, targets: string[], where?: string[]): string {
   return `${effect}|${[...targets].sort().join(',')}|${where ? [...where].sort().join(',') : ''}|${normalise(statement)}`;
 }
@@ -1270,7 +1577,7 @@ function excerpt(log: string): string {
 }
 
 function pushResult(row: PushRecord): PushResult {
-  if (!row.accepted && row.reason === 'stale') return { accepted: false, reason: 'stale' };
+  if (!row.accepted && (row.reason === 'stale' || row.reason === 'hedge-expired')) return { accepted: false, reason: row.reason };
   return {
     accepted: row.accepted,
     verdict: row.outside.length ? 'scope-violation' : 'in-scope',

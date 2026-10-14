@@ -1,12 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
 import { ArtifactsHost } from './artifacts-host';
 import { Coordinator, type PushReport, type Tx } from './core/coordinator';
-import { Engine, EngineError, type LandingOutcome, type NewClaim } from './core/engine';
+import { constitutionPath, Engine, EngineError, type LandingOutcome, type NewClaim } from './core/engine';
 import { FakeRepoHost } from './core/fake-host';
 import { landingMessage } from './core/landing';
-import { pairRecheck, syntheticPush } from './push-flow';
+import { findingCheckEvent, pairRecheck, syntheticPush } from './push-flow';
 import { lineRepoName, type RepoHost } from './core/repos';
-import type { CheckRun, PairCheck, PushRecord } from './core/types';
+import type { CheckRun, Decision, FindingEvidence, Line, PairCheck, PushRecord } from './core/types';
 import { SqlStore } from './sql-store';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
@@ -74,6 +74,45 @@ export class Graph extends DurableObject<Env> {
     return this.run((e) => e.addAssumption(statement, extra));
   }
 
+  proposeArticle(id: string, token: string, input: { statement: string; check?: string; checkFile?: string; replaces?: string }) {
+    return this.run((e) => e.proposeArticle(id, token, input));
+  }
+
+  async adoptArticle(graph: string, id: string, input: { check?: string; checkFile?: string; judged?: boolean }) {
+    return this.runWithRepos(graph, async (coordinator) => {
+      const a = this.engine.node(id);
+      if (a?.kind !== 'assumption' || !a.proposal || a.proposal.resolution) throw new EngineError('settled', 'this article is not awaiting adoption');
+      const check = input.judged ? undefined : input.check || a.check;
+      const checkFile = check ? input.checkFile || a.checkFile : undefined;
+      let atSha: string | undefined;
+      if (check) {
+        if (!checkFile || !constitutionPath(checkFile)) throw new EngineError('bad_request', 'an executable article needs a file under constitution/');
+        const line = await coordinator.ensureLine(a.line ?? 'main');
+        atSha = line.head;
+        if (!atSha || await this.repoHost.readFile(line.name, atSha, checkFile) === null) {
+          throw new EngineError('bad_request', 'land the check file on the owner-controlled line before adopting this article');
+        }
+      }
+      const adopted = this.tx((e) => e.adoptArticle(id, { ...input, check, checkFile, atSha }));
+      await this.startPairRechecks(a.line ?? 'main');
+      return adopted;
+    });
+  }
+
+  rejectArticle(id: string, reason: string) {
+    return this.run((e) => e.rejectArticle(id, reason));
+  }
+
+  publishFinding(id: string, lines: string[]) {
+    return this.run((e) => e.publishFinding(id, lines));
+  }
+
+  async decide(id: string, answer: Decision['answer'], reason: string) {
+    const result = this.run((e) => e.decide(id, answer, reason));
+    await this.scheduleHedges();
+    return result;
+  }
+
   // ---- the gate on pairs: the constitution on a push merged with the line ----
 
   pairContext(id: string) {
@@ -96,6 +135,10 @@ export class Graph extends DurableObject<Env> {
     return this.run((e) => e.readyForDisplay());
   }
 
+  publicReady() {
+    return this.run((e) => e.readyForDisplay().filter((n) => n.kind !== 'claim' || e.line(n.line).sharing !== 'isolated'));
+  }
+
   claim(graph: string, id: string, agent: string) {
     return this.runWithRepos(graph, (c) => c.claim(id, agent));
   }
@@ -112,11 +155,11 @@ export class Graph extends DurableObject<Env> {
     return this.runWithRepos(graph, (c) => c.release(id, token));
   }
 
-  createLine(graph: string, input: { name: string; from: string; decision?: string; option?: string }) {
+  createLine(graph: string, input: { name: string; from: string; decision?: string; option?: string; sharing?: Line['sharing']; group?: string }) {
     return this.runWithRepos(graph, (c) => c.createLine(input));
   }
 
-  labelLine(graph: string, name: string, labels: { decision?: string; option?: string }) {
+  labelLine(graph: string, name: string, labels: { decision?: string; option?: string; sharing?: Line['sharing']; group?: string }) {
     return this.runWithRepos(graph, async (c) => {
       await c.ensureLine(name);
       return this.engine.labelLine(name, labels);
@@ -128,8 +171,12 @@ export class Graph extends DurableObject<Env> {
     return this.run((e) => e.recordSpend(id, input).spend);
   }
 
-  why(path: string, line?: string) {
-    return this.run((e) => e.why(path, line));
+  why(path: string, line?: string, token?: string, privileged = false) {
+    return this.run((e) => {
+      const selected = line ?? e.lines().find((l) => l.served)?.name ?? 'main';
+      if (!privileged && !this.readContext(e, token).lines.some((l) => l.name === selected)) throw new EngineError('not_found', 'no readable line');
+      return e.why(path, selected);
+    });
   }
 
   serve(line: string) {
@@ -181,7 +228,7 @@ export class Graph extends DurableObject<Env> {
       const c = e.getClaim(claim);
       const l = e.line(line);
       if (!c.repo || !l.repo) throw new EngineError('no_repo', `no repo for ${claim} or line ${line}`);
-      return { line: l.repo, claim: c.repo, statement: c.statement, scope: c.scope };
+      return { line: l.repo, claim: c.repo, statement: c.statement, scope: c.scope, articles: e.constitution(line).filter((a) => a.check).map((a) => ({ id: a.id, check: a.check! })) };
     });
   }
 
@@ -286,8 +333,15 @@ export class Graph extends DurableObject<Env> {
   // Retry landings that could not be started, and give up on ones that never
   // reported back.
   async alarm() {
+    this.run((e) => e.expireHedges());
     const graph = this.ctx.storage.kv.get<string>('graph');
     if (graph) await this.pumpLandings(graph);
+    await this.scheduleHedges();
+  }
+
+  private async scheduleHedges() {
+    const next = Math.min(...this.engine.findings().filter((f) => f.status === 'unverified' && !f.decision).map((f) => f.hedgeUntil));
+    if (Number.isFinite(next)) await this.alarmBy(next);
   }
 
   // In local mode nothing runs checks, so a push is recorded as declaring
@@ -355,16 +409,76 @@ export class Graph extends DurableObject<Env> {
     return this.runWithRepos(graph, (c) => c.replan(id, token, change));
   }
 
-  fileFinding(
+  async fileFinding(
+    graph: string,
     finder: string,
     token: string,
     input: { statement: string; effect: 'contradicts' | 'helps'; targets: string[]; where?: string[] },
   ) {
-    return this.run((e) => e.fileFinding(finder, token, input));
+    const result = this.run((e) => e.fileFinding(finder, token, input));
+    if (result.ok) await this.scheduleHedges();
+    if (result.ok && !result.value.duplicate && input.effect === 'contradicts' && input.where?.length) {
+      await this.startFindingCheck(graph, result.value.finding.id);
+    }
+    return result;
   }
 
-  impactOf(findingId: string) {
-    return this.run((e) => e.impactOf(findingId));
+  async startFindingCheck(graph: string, id: string): Promise<Result<{ queued: boolean }>> {
+    const f = this.engine.node(id);
+    if (f?.kind !== 'finding') return { ok: false, code: 'not_found', message: `no finding ${id}` };
+    const finder = this.engine.node(f.finder);
+    const executable = f.effect === 'contradicts' && f.status === 'unverified' && !!f.where?.length &&
+      f.targets.every((id) => this.engine.constitution(f.line).some((a) => a.id === id && a.check));
+    if (!executable || finder?.kind !== 'claim' || !finder.repo || !this.env.PUSHES || this.repoHost instanceof FakeRepoHost) {
+      return { ok: true, value: { queued: false } };
+    }
+    try {
+      await this.env.PUSHES.create({ params: findingCheckEvent(finder.repo.name, id) });
+      return { ok: true, value: { queued: true } };
+    } catch {
+      return { ok: false, code: 'repo_unavailable', message: 'the check could not be scheduled; retry without changing the finding' };
+    }
+  }
+
+  async findingCheckContext(graph: string, id: string) {
+    return this.runWithRepos(graph, async (coordinator) => {
+      const f = this.engine.node(id);
+      if (f?.kind !== 'finding') throw new EngineError('not_found', `no finding ${id}`);
+      const line = await coordinator.ensureLine(f.line ?? 'main');
+      if (!line.head) throw new EngineError('no_repo', 'the line has no code to check');
+      return this.tx((e) => e.beginFindingCheck(id, line.head!));
+    });
+  }
+
+  async recordFindingCheck(id: string, evidence: FindingEvidence) {
+    let current = evidence;
+    try {
+      const line = this.engine.line(evidence.line);
+      const lineHead = line.repo ? await this.repoHost.readHead(line.repo.name) : null;
+      let moved = lineHead !== evidence.lineHead;
+      for (const head of evidence.heads) {
+        const claim = this.engine.getClaim(head.claim);
+        if (!claim.repo || await this.repoHost.readHead(claim.repo.name) !== head.sha) moved = true;
+      }
+      if (moved) current = { ...evidence, status: 'inconclusive', log: 'The checked code moved; check the new combination before settling this finding.' };
+    } catch {
+      current = { ...evidence, status: 'inconclusive', log: 'The current code versions could not be confirmed.' };
+    }
+    return this.run((e) => e.recordFindingCheck(id, current));
+  }
+
+  impactOf(findingId: string, token?: string, privileged = false) {
+    return this.run((e) => {
+      const impact = e.impactOf(findingId);
+      if (privileged) return impact;
+      const context = this.readContext(e, token);
+      if (!context.nodes.some((n) => n.id === findingId)) throw new EngineError('not_found', 'no readable finding');
+      const ids = new Set(context.nodes.map((n) => n.id));
+      const lines = new Set(context.lines.map((l) => l.name));
+      return { ...impact, affected: impact.affected.filter((id) => ids.has(id)), landedAtRisk: impact.landedAtRisk.filter((id) => ids.has(id)),
+        cost: impact.affected.filter((id) => ids.has(id)).reduce((sum, id) => sum + e.getClaim(id).pushes, 0),
+        realities: impact.realities.filter((r) => lines.has(r.line)).map((r) => ({ ...r, affected: r.affected.filter((id) => ids.has(id)), landedAtRisk: r.landedAtRisk.filter((id) => ids.has(id)) })) };
+    });
   }
 
   verifyFinding(findingId: string) {
@@ -418,6 +532,17 @@ export class Graph extends DurableObject<Env> {
       now: Date.now(),
       leaseMs: this.leaseMs,
     }));
+  }
+
+  publicSnapshot(token?: string) {
+    return this.run((e) => {
+      return { ...this.readContext(e, token), now: Date.now(), leaseMs: this.leaseMs };
+    });
+  }
+
+  private readContext(e: Engine, token?: string) {
+    const viewer = token ? e.claims().find((c) => c.lease?.token === token && c.lease.expiresAt > Date.now()) : undefined;
+    return viewer ? e.contextFor(viewer.id, token!) : e.publicContext();
   }
 }
 

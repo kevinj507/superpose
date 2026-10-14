@@ -3,7 +3,7 @@
 // plain English. Plain Node 22, no dependencies.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,9 +63,10 @@ export function agentEnv(extra = {}) {
 // be reached. Reads are retried; writes are not, because a retried write
 // whose first attempt did land would be refused or doubled.
 export class Api {
-  constructor(url, graph) {
+  constructor(url, graph, readToken) {
     this.url = url;
     this.graph = graph;
+    this.readToken = readToken;
   }
 
   async request(method, path, { token, body, timeoutMs = 30_000, retries } = {}) {
@@ -105,13 +106,13 @@ export class Api {
   }
 
   snapshot() {
-    return this.request('GET', '/snapshot');
+    return this.request('GET', '/snapshot', { token: this.readToken });
   }
   ready() {
-    return this.request('GET', '/ready');
+    return this.request('GET', '/ready', { token: this.readToken });
   }
   impact(finding) {
-    return this.request('GET', `/findings/${finding}/impact`);
+    return this.request('GET', `/findings/${finding}/impact`, { token: this.readToken });
   }
   // extra: { constitution: true, check } for an article of the constitution.
   addAssumption(admin, statement, extra = {}) {
@@ -147,6 +148,12 @@ export class Api {
   }
   finding(lease, input) {
     return this.request('POST', '/findings', { token: lease, body: input });
+  }
+  proposeArticle(lease, input) {
+    return this.request('POST', '/articles', { token: lease, body: input });
+  }
+  checkFinding(admin, id) {
+    return this.request('POST', `/findings/${id}/check`, { token: admin });
   }
   replan(lease, id, change) {
     return this.request('POST', `/claims/${id}/replan`, { token: lease, body: change, timeoutMs: 60_000 });
@@ -350,7 +357,7 @@ export function recordNotices(dir, entries) {
     const k = keyOf(n);
     if (k && known.has(k)) continue;
     if (k) known.add(k);
-    fresh.push(n);
+    fresh.push({ ...n, claim: readJson(stateFile(dir, 'claim.json'), {}).claim, receivedAt: Date.now() });
   }
   if (!fresh.length) return [];
   const all = [...have, ...fresh];
@@ -379,6 +386,9 @@ export function takeUnread(dir, channel) {
   const from = seen[channel] ?? 0;
   if (from >= all.length) return [];
   atomicWrite(seenFile, JSON.stringify({ ...seen, [channel]: all.length }) + '\n');
+  for (const notice of all.slice(from)) appendFileSync(stateFile(dir, 'presentations.jsonl'), JSON.stringify({
+    at: Date.now(), stage: 'presented', channel, claim: notice.claim, finding: notice.data?.finding, seq: notice.seq, key: notice.key,
+  }) + '\n');
   return all.slice(from);
 }
 
@@ -412,7 +422,7 @@ export function latestSeq(index) {
 // said about it before: the kinds below stand until acted on (verdicts on
 // old pushes do not, so they are left out of that first read).
 
-export const STANDING_NOTICES = new Set(['claim.helped', 'claim.stale', 'scope.touched', 'claim.landing_failed', 'reality.at_risk']);
+export const STANDING_NOTICES = new Set(['claim.helped', 'claim.stale', 'scope.touched', 'claim.landing_failed', 'reality.at_risk', 'finding.shared', 'article.adopted', 'article.rejected', 'decision.opened', 'decision.answered']);
 
 // What agents must not finish without having read: everything the platform
 // says about the work itself, as opposed to receipts for their own actions.
@@ -442,10 +452,12 @@ export function adviceFor(index, claimId) {
   const out = [];
   for (const f of index.nodes.values()) {
     if (f.kind !== 'finding' || f.status !== 'unverified' || f.finder === claimId) continue;
+    if (!findingMayReach(index, f, claimId)) continue;
     if (f.effect === 'helps' && f.targets.includes(claimId)) {
       out.push({
         key: `finding:${f.id}`,
         type: 'local.advice',
+        data: { finding: f.id },
         at: Date.now(),
         title: `ADVICE: claim ${f.finder} filed finding ${f.id} for this claim (not yet verified)`,
         text: `“${f.statement}”\nA checker has not ruled on it yet, so weigh it yourself. If it is right and changes what your work must do, act on it now rather than after you have built on the old view.`,
@@ -456,6 +468,7 @@ export function adviceFor(index, claimId) {
       out.push({
         key: `finding:${f.id}`,
         type: 'local.doubt',
+        data: { finding: f.id },
         at: Date.now(),
         title: `DOUBT: claim ${f.finder} says an assumption this claim rests on is false (finding ${f.id}, not yet verified)`,
         text:
@@ -465,6 +478,18 @@ export function adviceFor(index, claimId) {
     }
   }
   return out;
+}
+
+export function findingMayReach(index, finding, claimId) {
+  const destination = index.nodes.get(claimId)?.line ?? 'main';
+  if (finding.publishedTo?.includes(destination)) return true;
+  if (finding.status === 'unverified') return finding.finder === claimId;
+  const originName = finding.line ?? index.nodes.get(finding.finder)?.line ?? 'main';
+  const lines = index.snap?.lines ?? [];
+  const origin = lines.find((line) => line.name === originName) ?? { name: originName };
+  const target = lines.find((line) => line.name === destination) ?? { name: destination };
+  return originName === destination || (origin.sharing !== 'isolated' && target.sharing !== 'isolated') ||
+    (origin.sharing === 'isolated' && target.sharing === 'isolated' && (origin.group ?? origin.name) === (target.group ?? target.name));
 }
 
 // ---- scope ------------------------------------------------------------------------------
@@ -540,6 +565,19 @@ export function describeNotice(n, index, claimId) {
     ids.map((id) => `${id} ${quoteStatement(node(id))}`).join('; ') || '(unknown assumption)';
   const base = { seq: n.seq, type: n.type, at: Date.now(), data: d };
   switch (n.type) {
+    case 'finding.shared':
+      return { ...base, title: `SHARED FINDING: ${d.finding} (${d.status === 'unverified' ? 'candidate, not verified' : d.status})`,
+        text: `The owner published this finding to your line: “${d.statement ?? ''}”. ${d.status === 'unverified' ? 'Publication is permission to read it, not evidence that it is true. It does not stop your work.' : 'Read the evidence and any accompanying notice about affected work.'}` };
+    case 'finding.checked':
+      return { ...base, title: `FINDING CHECK: ${d.finding} is ${d.status}`, text: `The owner articles ran on the recorded combination at ${shortSha(d.lineHead ?? '')}.\n${d.log ?? ''}` };
+    case 'article.adopted':
+      return { ...base, title: `CONSTITUTION UPDATED: ${d.article}`, text: `The owner adopted “${d.statement ?? ''}”. Refresh your brief with ${CMD} status and check your approach against it.` };
+    case 'article.rejected':
+      return { ...base, title: `ARTICLE PROPOSAL DECLINED: ${d.article}`, text: d.reason ?? 'The owner declined this proposal.' };
+    case 'decision.opened':
+      return { ...base, title: `INVESTIGATION BUDGET ENDED: ${d.finding}`, text: `Decision ${d.decision} awaits the owner. Work explicitly depending on this unresolved finding is parked. Other work continues; the finding has not been verified.` };
+    case 'decision.answered':
+      return { ...base, title: `INVESTIGATION DECISION: ${d.answer}`, text: `The owner answered ${d.decision}: ${d.reason ?? ''}. This changes investigation permission, not whether the finding is true.` };
     case 'claim.stale':
       if (d.constitution) {
         const partners = (d.where ?? []).filter((w) => w !== claimId);
@@ -700,6 +738,7 @@ export function findingsAbout(index, claimId) {
   const out = [];
   for (const f of index.nodes.values()) {
     if (f.kind !== 'finding' || f.finder === claimId) continue;
+    if (!findingMayReach(index, f, claimId)) continue;
     if (f.effect === 'helps') {
       if (f.targets.includes(claimId)) out.push({ ...f, doubted: [] });
     } else if (f.where?.includes(claimId)) {
@@ -728,6 +767,12 @@ export function renderClaimMd(claim, index, dir) {
   const lines = [];
   lines.push(`# Claim ${id}`, '');
   lines.push(`**Make this true:** ${statement}`, '');
+  const promisesFile = join(dir, 'PROMISES.md');
+  if (existsSync(promisesFile)) {
+    const promises = readFileSync(promisesFile, 'utf8');
+    if (promises.length > 16_000) throw new Error('PROMISES.md is too large for a brief; shorten the owner’s product promises.');
+    lines.push(promises.replace(/^# Product promises\s*/, '## Product promises\n\n'), '', 'Read README.md for the project’s request and reporting procedure.', '');
+  }
   lines.push(
     'You are one of several agents working on this project at the same time. Superpose coordinates the work:',
     'each agent holds one claim, works in its own copy of the code, and pushes to its own repository.',
@@ -736,10 +781,18 @@ export function renderClaimMd(claim, index, dir) {
   );
   // The constitution: what the product keeps whatever is built. A statement
   // is a minimum; these are bounds, and every claim rests on them by rule.
-  const constitution = index ? [...index.nodes.values()].filter((n) => n.kind === 'assumption' && n.constitution && n.status === 'holding') : [];
+  const lineName = node?.line ?? 'main';
+  const inheritedArticles = index?.snap?.lines?.find((l) => l.name === lineName)?.articles;
+  const constitution = index ? [...index.nodes.values()].filter((n) => n.kind === 'assumption' && n.constitution && n.status === 'holding' &&
+    !n.supersededBy && !n.supersededOn?.[lineName] && (n.line === lineName || (inheritedArticles ? inheritedArticles.includes(n.id) : !n.line))) : [];
+  if (node?.hedgeOn) {
+    const f = index?.nodes.get(node.hedgeOn);
+    lines.push(`This is a bounded investigation of finding ${node.hedgeOn}: ${f?.statement ?? 'read its finding record'}.`,
+      'If its investigation window expires, wait for an owner decision before continuing. Other claims keep working.', '');
+  }
   if (constitution.length) {
     lines.push('## The constitution: what this product keeps, whatever you build', '');
-    for (const a of constitution) lines.push(`- \`${a.id}\`: ${a.statement}${a.check ? ` (checked by \`${a.check}\`)` : ' (judged: no test, a checker reads against it)'}`);
+    for (const a of constitution) lines.push(`- \`${a.id}\`: ${a.statement}${a.check ? ` (checked by \`${a.check}\`)` : ' (judged by the owner; no executable check)'}`);
     lines.push(
       '',
       'Your statement is a minimum; these are bounds, and every claim rests on them. At every push the platform merges',
@@ -858,6 +911,8 @@ export function renderClaimMd(claim, index, dir) {
     `- \`${CMD} status\`: the claim, its assumptions, the platform's verdict on your last push, recent notices`,
     `- \`${CMD} assume "<statement>"\`: declare something your work relies on`,
     `- \`${CMD} finding --contradicts <assumption id> "<what is false, and the evidence>"\`: report a false assumption`,
+    `- \`${CMD} finding --contradicts <your own assumption id> "<why you no longer rely on it>"\`: retract an assumption through the same finding process`,
+    `- \`${CMD} article "<product promise>" [--check "<command>" --check-file constitution/<file>]\`: propose a missing article; it remains advice until the owner adopts it`,
     `- \`${CMD} finding --helps <claim id> "<what helps that claim>"\`: offer something useful to another claim`,
     `- \`${CMD} replan --rests-on <assumption ids> [--add-scope <patterns>]\`: re-plan a stale claim, or widen its scope`,
     `- \`${CMD} done\`: push if needed, wait for the platform's verdict on that exact commit (scope, then tests), then finish the claim; if the tests fail it shows the output and does not finish`,

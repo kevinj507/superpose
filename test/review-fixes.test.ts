@@ -113,7 +113,7 @@ describe('claims that rest on something already contradicted', () => {
     expect(() => w.engine.declareAssumption(x.id, g.token, { statement: 'kv reads are strongly consistent.' })).toThrow(/contradicted/);
   });
 
-  it("refuting a finding parks its finder's work even if the finder handed its claim back", async () => {
+  it("refuting a report preserves independent work even if its finder handed the claim back", async () => {
     const w = await seeded();
     const A = w.engine.addAssumption('a');
     const finder = w.engine.addClaim({ statement: 'f', scope: ['src/a/**'] });
@@ -123,7 +123,7 @@ describe('claims that rest on something already contradicted', () => {
     await w.coord.notePush(finder.id, g.token, sha);
     await w.coord.release(finder.id, g.token);
     w.engine.refuteFinding(f.id);
-    expect(w.engine.getClaim(finder.id)).toMatchObject({ status: 'stale', kept: [expect.objectContaining({ sha })] });
+    expect(w.engine.getClaim(finder.id)).toMatchObject({ status: 'open', headSha: sha, kept: [] });
   });
 });
 

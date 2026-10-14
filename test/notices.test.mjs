@@ -67,8 +67,10 @@ describe('what the platform said about a claim', () => {
     expect(helped.text).toContain('a cached page keeps the old price after a buy');
   });
 
-  it('unverified findings addressed to the claim are advice and doubts, never its own, never refuted ones', () => {
-    const advice = adviceFor(index, 'c2');
+  it('unverified findings stay local until the owner deliberately publishes them', () => {
+    expect(adviceFor(index, 'c2')).toEqual([]);
+    const shared = indexSnapshot({ ...snap, nodes: snap.nodes.map((n) => n.kind === 'finding' ? { ...n, publishedTo: ['main'] } : n) });
+    const advice = adviceFor(shared, 'c2');
     expect(advice.map((n) => n.key)).toEqual(['finding:f5', 'finding:f6']);
     expect(advice[0]).toMatchObject({ type: 'local.advice' });
     expect(advice[0].title).toContain('c4');
@@ -136,10 +138,11 @@ describe('recording notices in a working copy', () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   it('keeps each platform event and each piece of advice once, whichever way it arrives', () => {
-    const first = recordNotices(dir, [...noticesAbout(index, 'c2', { types: STANDING_NOTICES }), ...adviceFor(index, 'c2')]);
+    const shared = indexSnapshot({ ...snap, nodes: snap.nodes.map((n) => n.kind === 'finding' ? { ...n, publishedTo: ['main'] } : n) });
+    const first = recordNotices(dir, [...noticesAbout(shared, 'c2', { types: STANDING_NOTICES }), ...adviceFor(shared, 'c2')]);
     expect(first.map((n) => n.key ?? n.seq)).toEqual([3, 4, 'finding:f5', 'finding:f6']);
     // The renewal brings the helped event again, the poll brings the advice again.
-    const again = recordNotices(dir, [...noticesAbout(index, 'c2'), ...adviceFor(index, 'c2')]);
+    const again = recordNotices(dir, [...noticesAbout(shared, 'c2'), ...adviceFor(shared, 'c2')]);
     expect(again.map((n) => n.seq)).toEqual([5]);
     expect(readNotices(dir)).toHaveLength(5);
     expect(recordNotices(dir, [])).toEqual([]);

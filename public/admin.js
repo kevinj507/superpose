@@ -111,6 +111,11 @@ export function lineOps(line, now) {
 
 // What each decision is called, whether it asks first, and its request.
 export const OPS = {
+  checkFinding: { label: 'Check this combination', tone: 'plain', confirm: false, path: (id) => `/findings/${encodeURIComponent(id)}/check` },
+  adopt: { label: 'Adopt article', tone: 'good', confirm: true, path: (id) => `/articles/${encodeURIComponent(id)}/adopt`, body: (n) => ({ judged: !n.check }) },
+  reject: { label: 'Reject proposal', tone: 'plain', confirm: true, reason: true, path: (id) => `/articles/${encodeURIComponent(id)}/reject`, body: (_, reason) => ({ reason }) },
+  park: { label: 'Park investigation', tone: 'plain', confirm: true, reason: true, path: (id) => `/decisions/${encodeURIComponent(id)}/answer`, body: (_, reason) => ({ answer: 'park-investigation', reason }) },
+  continue: { label: 'Continue investigation', tone: 'good', confirm: true, reason: true, path: (id) => `/decisions/${encodeURIComponent(id)}/answer`, body: (_, reason) => ({ answer: 'continue-investigation', reason }) },
   verify: { label: 'Verify', tone: 'bad', confirm: true, path: (id) => `/findings/${encodeURIComponent(id)}/verify` },
   refute: { label: 'Refute', tone: 'plain', confirm: true, path: (id) => `/findings/${encodeURIComponent(id)}/refute` },
   reopen: { label: 'Reopen', tone: 'plain', confirm: true, path: (id) => `/claims/${encodeURIComponent(id)}/reopen` },

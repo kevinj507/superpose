@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { ArtifactsHost } from './artifacts-host';
 import { readCheckConfig, type ExecJob } from './core/checks';
 import type { LandingOutcome } from './core/engine';
-import { checkMerged, landingFromCheck, mergeForLanding, outsideScope, outsideScopeOutcome, promoteLanding } from './core/landing';
+import { checkMerged, landingChecks, landingFromCheck, mergeForLanding, outsideScope, outsideScopeOutcome, promoteLanding } from './core/landing';
 import type { CheckRun } from './core/types';
 
 export interface LandParams {
@@ -37,7 +37,7 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
       const ctx = await step.do('find the line and the claim', async () => {
         const r = await stub.landingContext(line, claim);
         if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
-        return { line: r.value.line, claim: r.value.claim, statement: r.value.statement, scope: r.value.scope };
+        return { line: r.value.line, claim: r.value.claim, statement: r.value.statement, scope: r.value.scope, articles: r.value.articles };
       });
       // Platform trouble (no container, a failed fetch) throws, so the step
       // is retried; a conflict is an answer, not an error.
@@ -60,7 +60,12 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
       });
       if (outside.length) return outsideScopeOutcome(outside);
 
-      const config = await step.do('read the checks from the merged result', () => readCheckConfig(host, ctx.line.name, merged.merge));
+      const config = await step.do('read the checks from the merged result', async () => {
+        const configured = await readCheckConfig(host, ctx.line.name, merged.merge);
+        const current = await stub.landingContext(line, claim);
+        if (!current.ok) throw new Error(current.message);
+        return landingChecks(configured, current.value.articles);
+      });
       if (config) {
         let run: CheckRun;
         // Room for the setup and the check, each bounded by the timebox.

@@ -72,6 +72,12 @@ export interface Line {
   // The decision this line is one option of, in plain words.
   decision?: string;
   option?: string;
+  // Independent groups receive no findings from other groups unless the
+  // owner explicitly publishes a finding to them. Forks inherit the policy.
+  sharing?: 'project' | 'isolated';
+  group?: string;
+  // Accepted promises carried at fork time; later amendments stay local.
+  articles?: string[];
 }
 
 // One reality's exposure to a finding.
@@ -119,6 +125,8 @@ export interface Claim {
   pushes: number; // progress, used for the cost of an interrupt
   kept: KeptBranch[];
   version: number;
+  // Explicit speculative work. Expiry parks this work, not unrelated claims.
+  hedgeOn?: string;
 }
 
 export type AssumptionStatus = 'holding' | 'contradicted';
@@ -135,6 +143,28 @@ export interface Assumption {
   status: AssumptionStatus;
   constitution?: boolean;
   check?: string; // a command, run at the repo root, e.g. "node --test constitution/see-is-pay.test.js"
+  line?: string;
+  checkFile?: string;
+  proposal?: { by: string; at: number; resolution?: 'adopted' | 'rejected'; reason?: string; atSha?: string };
+  supersededBy?: string;
+  supersededOn?: Record<string, string>;
+  replaces?: string;
+}
+
+export type StatementStatus = 'todo' | 'in_progress' | 'review' | 'done';
+
+// A decision records permission to continue an investigation. Its answer
+// never supplies evidence or changes whether a finding is true.
+export interface Decision {
+  id: string;
+  kind: 'decision';
+  statement: string;
+  status: StatementStatus;
+  finding: string;
+  deadline: number;
+  defaultAction: 'park-investigation';
+  answer?: 'park-investigation' | 'continue-investigation';
+  reason?: string;
 }
 
 // resolved: the combination it was about no longer exists (the gate re-ran
@@ -155,9 +185,24 @@ export interface Finding {
   where?: string[];
   fingerprint: string;
   hedgeUntil: number;
+  at?: number;
+  line?: string;
+  publishedTo?: string[];
+  decision?: string;
+  evidence?: FindingEvidence;
 }
 
-export type GraphNode = Claim | Assumption | Finding;
+export interface FindingEvidence {
+  status: 'running' | 'confirmed' | 'refuted' | 'inconclusive';
+  line: string;
+  lineHead: string;
+  heads: { claim: string; sha: string }[];
+  articles: { id: string; check: string }[];
+  log?: string;
+  at: number;
+}
+
+export type GraphNode = Claim | Assumption | Finding | Decision;
 
 // What the platform concluded about one commit of one claim. A verdict
 // belongs to the exact SHA: a new commit gets its own row, and the claim's
@@ -195,6 +240,7 @@ export interface PairCheck {
   runner?: string;
   startedAt: number;
   finishedAt?: number;
+  articles?: string[];
 }
 
 export interface PushRecord {
@@ -209,7 +255,7 @@ export interface PushRecord {
   outsideCount?: number;
   tooLarge?: boolean; // more files changed than can be checked: it cannot land
   accepted: boolean; // became the claim's head
-  reason?: 'stale' | 'not-head' | 'other-branch' | 'not-claimed';
+  reason?: 'stale' | 'hedge-expired' | 'not-head' | 'other-branch' | 'not-claimed';
   verdict: Verdict;
   checks?: CheckRun;
   pair?: PairCheck;
@@ -221,6 +267,13 @@ export type EventType =
   | 'finding.verified'
   | 'finding.refuted'
   | 'finding.hedge_expired'
+  | 'finding.shared'
+  | 'finding.checked'
+  | 'article.proposed'
+  | 'article.adopted'
+  | 'article.rejected'
+  | 'decision.opened'
+  | 'decision.answered'
   | 'assumption.contradicted'
   | 'claim.stale'
   | 'claim.helped'

@@ -241,7 +241,7 @@ async function load() {
   let res;
   let snap;
   try {
-    res = await fetch(url, { cache: 'no-store', headers: { accept: 'application/json' }, signal: ctl.signal });
+    res = await fetch(url, { cache: 'no-store', headers: { accept: 'application/json', ...(!S.fixture && S.admin.token ? { authorization: `Bearer ${S.admin.token}` } : {}) }, signal: ctl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     snap = await res.json();
   } finally {
@@ -305,7 +305,7 @@ function setConn(state, err) {
 function apply(snap) {
   const next = new Map();
   for (const n of Array.isArray(snap?.nodes) ? snap.nodes : []) {
-    if (n && typeof n.id === 'string' && (n.kind === 'claim' || n.kind === 'assumption' || n.kind === 'finding')) {
+    if (n && typeof n.id === 'string' && ['claim', 'assumption', 'finding', 'decision'].includes(n.kind)) {
       next.set(n.id, n);
     }
   }
@@ -426,6 +426,8 @@ function structureKey(nodes, edges) {
 
 function displayStatus(n) {
   if (!n) return undefined;
+  if (n.kind === 'assumption' && n.proposal && !n.proposal.resolution) return 'review';
+  if (n.kind === 'assumption' && (n.proposal?.resolution === 'rejected' || n.supersededBy)) return 'done';
   const h = S.hold.get(n.id);
   if (h) {
     if (Date.now() < h.until) return h.status;
@@ -1065,6 +1067,7 @@ async function loadImpactNow(f, fid) {
     try {
       const res = await fetch(`/api/graphs/${encodeURIComponent(S.gid)}/findings/${encodeURIComponent(fid)}/impact`, {
         cache: 'no-store',
+        headers: S.admin.token ? { authorization: `Bearer ${S.admin.token}` } : {},
         signal: ctl.signal,
       });
       if (res.ok) imp = await res.json();
@@ -1176,13 +1179,14 @@ function renderNode(n, ctx, { quiet = false } = {}) {
     if (S.loaded) addTemp(el, ['is-new'], 800);
   }
   const status = displayStatus(n);
-  const html = n.kind === 'claim' ? claimHTML(n, status, ctx) : n.kind === 'assumption' ? assumptionHTML(n, status, ctx) : findingHTML(n, status, box);
+  const html = n.kind === 'claim' ? claimHTML(n, status, ctx) : n.kind === 'assumption' || n.kind === 'decision' ? assumptionHTML(n, status, ctx) : findingHTML(n, status, box);
   if (html !== rec.html) {
     rec.el.innerHTML = html;
     rec.html = html;
     tickWithin(rec.el);
   }
   const base = ['node', `k-${n.kind}`, `s-${status}`];
+  if (n.kind === 'decision') base.push('k-assumption');
   // Deeply indented cards are narrow: their badges show just the icon.
   if (n.kind === 'claim' && box.w < 205) base.push('narrow');
   if (n.kind === 'claim' && status === 'open' && openState(n).ready) base.push('is-ready');
@@ -1385,9 +1389,11 @@ function claimHTML(c, status, ctx) {
 function assumptionHTML(a, status, ctx) {
   const n = ctx.reach.get(a.id) ?? 0;
   const bad = status === 'contradicted';
+  const label = a.kind === 'decision' ? `Decision · ${status}` : a.proposal?.resolution === 'rejected' ? 'Rejected proposal' :
+    a.proposal && !a.proposal.resolution ? 'Article proposal · review' : a.constitution ? 'Article' : 'Assumption';
   return `<div class="card"><div class="a-top"><span class="a-id">${esc(a.id)}</span>${
-    bad ? `<span class="a-status">${icon('bolt')} Contradicted</span>` : '<span class="a-kind">Assumption</span>'
-  }<span class="a-count" title="${n} ${n === 1 ? 'claim rests' : 'claims rest'} on it, directly or through claims built on them">${n ? `${n} rest on it` : 'nothing rests on it'}</span></div><div class="a-text">${esc(a.statement)}</div></div>`;
+    bad ? `<span class="a-status">${icon('bolt')} Contradicted</span>` : `<span class="a-kind">${esc(label)}</span>`
+  }${a.kind === 'decision' || a.proposal && !a.constitution ? '' : `<span class="a-count" title="${n} ${n === 1 ? 'claim rests' : 'claims rest'} on it, directly or through claims built on them">${n ? `${n} rest on it` : 'nothing rests on it'}</span>`}</div><div class="a-text">${esc(a.statement)}</div></div>`;
 }
 
 function findingHTML(f, status, box) {
@@ -2039,7 +2045,7 @@ function renderInspector() {
     $('sheet-title').textContent = S.feed.length ? `Events · ${S.feed.length}` : 'Events';
     return;
   }
-  const body = n.kind === 'claim' ? inspectClaim(n) : n.kind === 'assumption' ? inspectAssumption(n) : inspectFinding(n);
+  const body = n.kind === 'claim' ? inspectClaim(n) : n.kind === 'assumption' ? inspectAssumption(n) : n.kind === 'decision' ? inspectDecision(n) : inspectFinding(n);
   const html = `<div class="ins-head"><button class="back" data-act="close" type="button">${icon('back')}Events</button><span class="spacer"></span><button class="icon-btn" data-act="reveal" type="button" title="Show it on the canvas" aria-label="Show it on the canvas">${icon(
     'fit',
   )}</button></div><div class="ins-body">${body}</div>`;
@@ -2279,6 +2285,18 @@ function tailOf(log) {
 }
 
 function inspectAssumption(a) {
+  if (a.proposal) {
+    const pending = !a.proposal.resolution;
+    let out = `<p class="eyebrow">${pending ? 'Article proposal' : 'Article'} · ${esc(a.id)}</p><h2 class="ins-title">${esc(a.statement)}</h2>`;
+    out += `<div class="ins-pills"><span class="spill plain">${pending ? 'review' : esc(a.proposal.resolution)}</span><span class="spill plain">${esc(a.line ?? 'main')}</span></div>`;
+    if (pending) out += actsHTML(a.id, ['adopt', 'reject']);
+    out += `<dl class="kv"><dt>Proposed by</dt><dd>${chip(a.proposal.by, S.nodes)}</dd><dt>Check</dt><dd>${a.check ? `<code>${esc(a.check)}</code>` : 'Owner judgment'}</dd></dl>`;
+    if (a.proposal.reason) out += `<p class="note">${esc(a.proposal.reason)}</p>`;
+    if (a.proposal.atSha) out += `<p class="note">Adopted from ${esc(shortSha(a.proposal.atSha))}.</p>`;
+    if (a.replaces) out += sec('Amends', chip(a.replaces, S.nodes));
+    if (a.supersededBy || a.supersededOn) out += sec('Replaced by', chips([...new Set([a.supersededBy, ...Object.values(a.supersededOn ?? {})].filter(Boolean))], S.nodes));
+    return out;
+  }
   const status = displayStatus(a);
   const direct = S.rel.dependents.get(a.id) ?? [];
   const reach = downstream(S.rel, [a.id]);
@@ -2297,6 +2315,17 @@ function inspectAssumption(a) {
   out += sec('Rests on it', direct.length ? direct.map(relRow).join('') : '<p class="note">Nothing yet.</p>', direct.length);
   if (through.length) out += sec('Through them', through.map(relRow).join(''), through.length);
   if (findings.length) out += sec('Findings', findings.map((f) => relRow(f.id)).join(''), findings.length);
+  return out;
+}
+
+function inspectDecision(d) {
+  let out = `<p class="eyebrow">Decision · ${esc(d.id)}</p><h2 class="ins-title">${esc(d.statement)}</h2>`;
+  out += `<div class="ins-pills"><span class="spill plain">${esc(d.status)}</span></div>`;
+  if (d.status === 'review') out += actsHTML(d.id, ['park', 'continue']);
+  out += `<dl class="kv"><dt>Finding</dt><dd>${chip(d.finding, S.nodes)}</dd><dt>Default</dt><dd>Park investigation</dd>`;
+  if (d.answer) out += `<dt>Decision</dt><dd>${d.answer === 'continue-investigation' ? 'Continue investigation' : 'Park investigation'}</dd>`;
+  out += '</dl>';
+  if (d.reason) out += `<p class="note">${esc(d.reason)}</p>`;
   return out;
 }
 
@@ -2334,7 +2363,7 @@ function inspectFinding(f) {
   out += `<div class="ins-pills"><span class="spill s-${esc(f.status)}">${esc(f.status === 'unverified' ? 'unverified · hedge' : f.status)}</span><span class="spill ${
     f.effect === 'helps' ? 's-helps' : 'plain'
   }">${f.effect === 'helps' ? 'helps' : 'contradicts'}</span></div>`;
-  out += actsHTML(f.id, findingOps(f));
+  out += actsHTML(f.id, [...(f.status === 'unverified' && f.effect === 'contradicts' && f.where?.length ? ['checkFinding'] : []), ...findingOps(f)]);
   const finder = S.nodes.get(f.finder);
   out += '<dl class="kv">';
   out += `<dt>Filed by</dt><dd>${f.finder ? chip(f.finder, S.nodes) : '—'}${finder?.lease ? ` ${agentHTML(finder.lease.holder)}` : ''}</dd>`;
@@ -2345,6 +2374,11 @@ function inspectFinding(f) {
     }</dd>`;
   }
   out += '</dl>';
+
+  if (f.where?.length) out += sec('Where', chips(f.where, S.nodes));
+  if (f.publishedTo?.length) out += sec('Published to', `<p class="note">${esc(f.publishedTo.join(', '))}</p>`);
+  if (f.decision) out += sec('Investigation decision', chip(f.decision, S.nodes));
+  if (f.evidence) out += sec('Recorded check', `<p class="note">${esc(f.evidence.status)} · line ${esc(shortSha(f.evidence.lineHead))}</p><p class="note">${esc(f.evidence.heads.map((h) => `${h.claim} at ${shortSha(h.sha)}`).join(', '))}</p>${f.evidence.log ? `<pre class="log">${esc(tailOf(f.evidence.log))}</pre>` : ''}`);
 
   if (f.effect !== 'helps') {
     const confirming = S.act?.target === f.id && S.act.op === 'verify' && S.act.phase !== 'done';
@@ -2493,6 +2527,7 @@ function actsHTML(target, ops) {
 
 function confirmTitle(op, name) {
   return {
+    adopt: `Adopt ${name}?`, reject: `Reject ${name}?`, park: 'Park this investigation?', continue: 'Continue this investigation?',
     verify: `Verify ${name}?`,
     refute: `Refute ${name}?`,
     reopen: `Reopen ${name}?`,
@@ -2503,12 +2538,16 @@ function confirmTitle(op, name) {
 }
 
 function confirmButton(op, name) {
-  return { verify: `Verify ${name}`, refute: `Refute ${name}`, reopen: `Reopen ${name}`, land: 'Mark it landed', serve: `Serve ${name}`, abandon: 'Give it up' }[op];
+  return { adopt: 'Adopt article', reject: 'Reject proposal', park: 'Park investigation', continue: 'Continue investigation', verify: `Verify ${name}`, refute: `Refute ${name}`, reopen: `Reopen ${name}`, land: 'Mark it landed', serve: `Serve ${name}`, abandon: 'Give it up' }[op];
 }
 
 function confirmBody(a, name) {
   const n = S.nodes.get(name);
   switch (a.op) {
+    case 'adopt':
+      return `<p class="note">This becomes a product promise on ${esc(n?.line ?? 'main')}.${n?.check ? ` Its protected check must already be on that line: <code>${esc(n.checkFile ?? 'constitution/')}</code>.` : ' Future contradictions need owner judgment.'}</p>`;
+    case 'reject': case 'park': case 'continue':
+      return `${a.op === 'continue' ? '<p class="note">The investigation gets another bounded window.</p>' : ''}<label>Reason<textarea data-op-reason rows="3">${esc(a.reason ?? '')}</textarea></label>`;
     case 'verify': {
       if (n?.effect === 'helps') return `<p class="note">It stops nobody: the claims it helps (${chips(n.targets ?? [], S.nodes)}) hear about it at their next renewal.</p>`;
       const imp = a.impact;
@@ -2526,10 +2565,7 @@ function confirmBody(a, name) {
       }${imp.landedAtRisk.length ? `<p class="note">Landed and at risk: ${chips(imp.landedAtRisk, S.nodes, 12)}</p>` : ''}${rows ? `<div class="confirm-realities">${rows}</div>` : ''}<p class="note">Only these claims stop. Their work so far is kept on a branch, and each agent hears at its next lease renewal. Everyone else keeps working.</p>`;
     }
     case 'refute': {
-      const finder = n?.finder ? S.nodes.get(n.finder) : null;
-      return `<p class="note">It stays in the graph as refuted, so the next agent to suspect the same thing is pointed at it. Nobody else changes${
-        finder ? `; its finder ${chip(finder.id, S.nodes)}${finder.lease ? ` (${esc(finder.lease.holder)})` : ''} has its work on it kept aside and re-plans` : ''
-      }.</p>`;
+      return '<p class="note">The finding stays on record. Work explicitly based on this suspicion is parked for re-planning.</p>';
     }
     case 'reopen':
       return `<p class="note">It goes back to the ready set with its repo. Its next agent brings it up to date with ${esc(n?.line || 'main')} and finishes it again.</p>`;
@@ -2572,7 +2608,7 @@ async function fetchImpact(fid) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 8000);
     try {
-      const res = await fetch(`/api/graphs/${encodeURIComponent(S.gid)}/findings/${encodeURIComponent(fid)}/impact`, { cache: 'no-store', signal: ctl.signal });
+      const res = await fetch(`/api/graphs/${encodeURIComponent(S.gid)}/findings/${encodeURIComponent(fid)}/impact`, { cache: 'no-store', headers: S.admin.token ? { authorization: `Bearer ${S.admin.token}` } : {}, signal: ctl.signal });
       if (res.ok) {
         const imp = await res.json();
         if (Array.isArray(imp?.affected)) return { ...imp, realities: Array.isArray(imp.realities) ? imp.realities : localRealities(imp.affected, imp.landedAtRisk ?? []) };
@@ -2590,9 +2626,15 @@ async function runOp(op, target) {
   const def = OPS[op];
   if (!def || !S.admin.token) return;
   const name = target.replace(/^line:/, '');
-  S.act = { ...(S.act?.target === target && S.act.op === op ? S.act : {}), target, op, phase: 'busy' };
+  const reason = document.querySelector('[data-op-reason]')?.value?.trim() ?? '';
+  if (def.reason && !reason) {
+    S.act = { target, op, phase: 'error', message: 'Add a reason for the decision.' };
+    renderInspector();
+    return;
+  }
+  S.act = { ...(S.act?.target === target && S.act.op === op ? S.act : {}), target, op, phase: 'busy', reason };
   renderInspector();
-  const r = await adminRequest(S.gid, def.path(name), S.admin.token);
+  const r = await adminRequest(S.gid, def.path(name), S.admin.token, { body: def.body?.(S.nodes.get(name), reason) });
   if (S.act?.target !== target || S.act.op !== op) return;
   if (!r.ok) {
     S.act = { ...S.act, phase: 'error', error: r.error, message: r.message, status: r.status };
@@ -2608,6 +2650,11 @@ async function runOp(op, target) {
 
 function doneMessage(op, name, data) {
   switch (op) {
+    case 'checkFinding': return data?.queued ? `Check requested for ${name}.` : 'This finding needs owner judgment.';
+    case 'adopt': return `Adopted ${name}.`;
+    case 'reject': return `Rejected ${name}.`;
+    case 'park': return 'Investigation parked.';
+    case 'continue': return 'Investigation window extended.';
     case 'verify':
       return Array.isArray(data?.affected) ? `Verified ${name}: ${plural(data.affected.length, 'claim')} stopped.` : `Verified ${name}.`;
     case 'refute':
@@ -2724,7 +2771,7 @@ async function runWhy() {
     try {
       const q = new URLSearchParams({ path: w.path });
       if (w.line) q.set('line', w.line);
-      const res = await fetch(`/api/graphs/${encodeURIComponent(S.gid)}/why?${q}`, { cache: 'no-store', signal: ctl.signal });
+      const res = await fetch(`/api/graphs/${encodeURIComponent(S.gid)}/why?${q}`, { cache: 'no-store', headers: S.admin.token ? { authorization: `Bearer ${S.admin.token}` } : {}, signal: ctl.signal });
       const data = await res.json().catch(() => null);
       if (res.ok && Array.isArray(data)) result = data;
       else if (res.status !== 404 || data?.error !== 'not_found') error = data?.message ?? `HTTP ${res.status}`;

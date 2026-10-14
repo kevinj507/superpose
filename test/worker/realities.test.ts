@@ -73,7 +73,7 @@ describe('realities: one decision built two ways', () => {
     const f = (await api('POST', `${w.g}/findings`, lease, {
       finder: w.helper.id, statement: 'KV is eventually consistent: counters drift', effect: 'contradicts', targets: [w.kv.id],
     })).data.finding;
-    const impact = (await api('GET', `${w.g}/findings/${f.id}/impact`)).data;
+    const impact = (await api('GET', `${w.g}/findings/${f.id}/impact`, ADMIN)).data;
     expect(impact.realities).toEqual([
       { line: 'main', served: true, affected: [], landedAtRisk: [w.a.id], safe: false },
       { line: 'do', served: false, affected: [], landedAtRisk: [], safe: true },
@@ -96,7 +96,7 @@ describe('realities: one decision built two ways', () => {
     const f = (await api('POST', `${w.g}/findings`, lease, {
       finder: w.helper.id, statement: 'KV drifts', effect: 'contradicts', targets: [w.kv.id],
     })).data.finding;
-    const later = (await api('GET', `${w.g}/findings/${f.id}/impact`)).data.realities.find((r: any) => r.line === 'later');
+    const later = (await api('GET', `${w.g}/findings/${f.id}/impact`, ADMIN)).data.realities.find((r: any) => r.line === 'later');
     expect(later).toEqual({ line: 'later', served: false, affected: [], landedAtRisk: [w.a.id], safe: false });
   });
 

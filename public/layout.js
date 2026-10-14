@@ -31,7 +31,7 @@ export const DIM = {
   margin: 60, // room for curves outside the columns
 };
 
-const RANK = { assumption: 0, claim: 1, finding: 2 };
+const RANK = { assumption: 0, claim: 1, finding: 2, decision: 3 };
 
 // Ids are a letter and a number (a3, c12, f1): order by letter, then number.
 export function cmpId(a, b) {
@@ -113,7 +113,7 @@ export function computeLayout(nodes, edges, opts = {}) {
   const findings = [];
   for (const n of index.values()) {
     if (n.kind === 'claim') claims.push(n);
-    else if (n.kind === 'assumption') assumptions.push(n);
+    else if (n.kind === 'assumption' || n.kind === 'decision') assumptions.push(n);
     else findings.push(n);
   }
   const byNodeId = (a, b) => cmpId(a.id, b.id);

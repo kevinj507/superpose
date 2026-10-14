@@ -85,14 +85,14 @@ describe('the hedge', () => {
     expect(mine.notices.map((n) => n.type)).toEqual(['finding.filed']);
   });
 
-  it('refuting parks the finder\'s work, touches no one else, and is remembered', () => {
+  it('remembers refutation without treating a report as speculative work', () => {
     w.engine.push(w.finder, w.tokens.get(w.finder)!, { sha: 'hedge-sha', changedPaths: ['src/o50/a.ts'] });
     w.engine.refuteFinding(findingId);
     expect(w.engine.node(w.finder)).toMatchObject({
-      status: 'stale',
-      kept: [{ sha: 'hedge-sha', reason: `finding ${findingId} refuted` }],
+      status: 'claimed',
+      kept: [],
     });
-    expect(w.engine.claims().filter((c) => c.status === 'stale')).toHaveLength(1);
+    expect(w.engine.claims().filter((c) => c.status === 'stale')).toHaveLength(0);
     expect(w.engine.node(w.A.id)).toMatchObject({ status: 'holding' });
 
     const other = w.eightyEight[0]!;

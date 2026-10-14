@@ -244,6 +244,12 @@ class Runner {
     return this.pending;
   }
 
+  // The scheduler sees the project; each agent receives its authorized context.
+  async claimSnapshot(lease) {
+    const res = await this.api.request('GET', '/snapshot', { token: lease });
+    return res.ok ? indexSnapshot(res.data) : null;
+  }
+
   async sleep(ms) {
     if (this.stopping) return;
     await new Promise((resolveSleep) => {
@@ -534,7 +540,8 @@ class Slot {
     };
     writeClaim(dir, claim);
     atomicWrite(stateFile(dir, 'NOTICES.md'), `# Notices for claim ${grant.id} (newest first)\n\nNone yet. The runner adds to this file as the platform speaks.\n`);
-    const index = await this.runner.snapshot({ maxAgeMs: 0 });
+    const index = await this.runner.claimSnapshot(grant.token);
+    if (!index) throw new Error('Could not read this claim’s authorized context; retry before starting the agent.');
     // Whoever takes a claim hears what was said about it before: a finding
     // filed to help it while it was open, a push into its scope, why it went
     // stale. Verdicts on old pushes are left out; the poll carries what comes next.
@@ -671,9 +678,9 @@ class Slot {
       }
     } else if (event.type === 'result') {
       outcome.result = event;
-      outcome.cost = event.total_cost_usd ?? 0;
+      outcome.cost = event.total_cost_usd ?? null;
       this.set({ cost: outcome.cost, last: `agent finished: ${event.subtype}${event.is_error ? ' (error)' : ''}` });
-      this.log(`agent ended: ${event.subtype}, ${event.num_turns} turns, $${(event.total_cost_usd ?? 0).toFixed(3)}`);
+      this.log(`agent ended: ${event.subtype}, ${event.num_turns} actions${outcome.cost === null ? ', dollar usage unavailable' : `, $${outcome.cost.toFixed(3)}`}`);
     }
   }
 
@@ -738,11 +745,11 @@ class Slot {
       verdict: head?.verdict,
       headSha: node?.headSha,
       turns: outcome.result?.num_turns ?? (outcome.turns || undefined),
-      cost: outcome.cost || undefined,
+      cost: outcome.cost ?? null,
       transcript: this.transcript,
     });
     // What the run cost goes into the graph, beside the claim's verdicts.
-    if (outcome.result) {
+    if (outcome.result && outcome.cost !== null) {
       await this.runner.api
         .spend(this.opts.agentKey, id, { usd: outcome.cost ?? 0, turns: outcome.result.num_turns ?? outcome.turns ?? 0, model: outcome.model })
         .catch(() => {});
@@ -833,15 +840,14 @@ class LeaseKeeper {
   }
 
   // A renewal replaces the git token, so it happens once a minute; a notice
-  // cannot wait that long. Between renewals the graph is read (a public
-  // snapshot the agents share, no token involved) for anything new said
+  // cannot wait that long. Between renewals the claim's scoped snapshot is read for anything new said
   // about this claim, and for advice filed for it that no checker has ruled
   // on yet. Whatever the renewal brings later is recognised and not repeated.
   async poll() {
     if (this.stopped || hasMarker(this.dir, 'DONE') || hasMarker(this.dir, 'RELEASED')) return;
     let index;
     try {
-      index = await this.runner.snapshot({ maxAgeMs: this.pollInterval / 2 });
+      index = await this.runner.claimSnapshot(this.token);
     } catch {
       return;
     }
@@ -885,7 +891,7 @@ class LeaseKeeper {
         patch.gitExpiresAt = v.git.expiresAt;
       }
       if (v.notices?.length) {
-        const index = await this.runner.snapshot({ maxAgeMs: 0 });
+        const index = await this.runner.claimSnapshot(this.token);
         // The poll usually got here first; only what it missed is new.
         for (const n of recordNotices(this.dir, v.notices.map((n) => describeNotice(n, index, this.id)))) this.slot.log(`notice: ${n.title}`);
       }
@@ -901,6 +907,11 @@ class LeaseKeeper {
       } else if (v.reason === 'stale') {
         patch.status = 'stale';
         this.slot.set({ state: 'stale' });
+      } else if (v.reason === 'hedge-expired') {
+        setMarker(this.dir, 'HEDGE_EXPIRED', 'This speculative investigation needs an owner decision before more work.');
+        this.slot.log(`${this.id}: investigation budget expired; parking this agent without affecting other work`);
+        this.slot.kill('SIGTERM');
+        return this.stop();
       }
       const claim = Object.keys(patch).length ? updateClaim(this.dir, patch) : null;
       if (v.reason === 'stale' && !hasMarker(this.dir, 'STALE')) {
@@ -912,7 +923,7 @@ class LeaseKeeper {
             `(before ${new Date(this.expiresAt).toISOString()}), or the lease runs out.`,
         );
         // The brief now opens with the stale warning.
-        atomicWrite(join(this.dir, 'CLAIM.md'), renderClaimMd(claim, await this.runner.snapshot({ maxAgeMs: 0 }), this.dir));
+        atomicWrite(join(this.dir, 'CLAIM.md'), renderClaimMd(claim, await this.runner.claimSnapshot(this.token), this.dir));
         this.slot.log(`${this.id} is STALE; the agent has ${formatDuration(left)} to re-plan`);
       }
       return;
@@ -1058,7 +1069,7 @@ async function main() {
       claudeBin: values.claude,
       host: hostname(),
     };
-    const runner = new Runner(new Api(url, graph), opts);
+    const runner = new Runner(new Api(url, graph, opts.agentKey), opts);
     await runner.start();
     return runner.stopping ? 130 : 0;
   } catch (err) {

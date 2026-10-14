@@ -63,7 +63,7 @@ export class Coordinator {
   }
 
   // Fork a line into a new one: another option of a decision, built side by side.
-  async createLine(input: { name: string; from: string; decision?: string; option?: string }) {
+  async createLine(input: { name: string; from: string; decision?: string; option?: string; sharing?: 'project' | 'isolated'; group?: string }) {
     this.tx((e) => {
       if (e.lines().some((l) => l.name === input.name)) throw new EngineError('exists', `line ${input.name} exists`);
       if (e.line(input.from).landing) throw new EngineError('busy', `a landing is in progress on ${input.from}; try again in a moment`);

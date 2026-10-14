@@ -3435,3 +3435,16 @@ html[data-view='canvas'] .landing {
     display: none;
   }
 }
+
+.confirm-body textarea {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  resize: vertical;
+}

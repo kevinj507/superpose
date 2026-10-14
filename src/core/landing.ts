@@ -13,6 +13,12 @@ import { changedPathsChecked, type RepoHost } from './repos';
 import { inScope } from './scope';
 import type { CheckRun, RepoRef } from './types';
 
+export function landingChecks(config: CheckConfig | null, articles: { check: string }[]): CheckConfig | null {
+  if (!config && !articles.length) return null;
+  const commands = [...(config ? [config.check] : []), ...articles.map((a) => a.check)];
+  return { ...config, check: commands.map((command) => `( ${command} )`).join(' && '), timeoutSeconds: config?.timeoutSeconds ?? 300 };
+}
+
 // Landing runs in three containers, so code from the repo never runs where a
 // token that can write the line exists:
 //   1. merge (trusted: no repo code runs): fetch the line and the claim's exact

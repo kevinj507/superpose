@@ -73,6 +73,7 @@ const USAGE = `Usage: ${CMD} <command> [options]
   assume "<statement>"                     declare an assumption your work rests on (or: assume --id <assumption id>)
   finding --contradicts <id> "<statement>" report that an assumption is false, with the evidence
   finding --helps <claim id> "<statement>" offer something useful to another claim
+  article "<product promise>"              propose an article for owner review; optional --check and --check-file
   replan [--rests-on <ids|none>] [--add-scope <patterns> | --scope <patterns>] [--statement "<text>"]
                                            re-plan the claim (after it goes stale, or to widen its scope);
                                            --rests-on defaults to the assumptions that still hold; --add-scope
@@ -97,6 +98,9 @@ const OPTIONS = {
   id: { type: 'string' },
   wait: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
+  check: { type: 'string' },
+  'check-file': { type: 'string' },
+  replaces: { type: 'string' },
 };
 
 class Refused extends Error {}
@@ -113,7 +117,7 @@ function load(values, cwd) {
     throw new UsageError('No claim here: run this inside a claim working copy (a folder with .superpose/claim.json), or pass --dir.');
   }
   const claim = readClaim(dir);
-  return { dir, claim, api: new Api(claim.url, claim.graph) };
+  return { dir, claim, api: new Api(claim.url, claim.graph, claim.lease) };
 }
 
 async function snapshotIndex(api) {
@@ -125,6 +129,7 @@ function terminalState(dir) {
   if (hasMarker(dir, 'DONE')) return 'done';
   if (hasMarker(dir, 'RELEASED')) return 'released';
   if (hasMarker(dir, 'LOST')) return 'lost';
+  if (hasMarker(dir, 'HEDGE_EXPIRED')) return 'hedge-expired';
   if (hasMarker(dir, 'STALE')) return 'stale';
   return null;
 }
@@ -134,6 +139,7 @@ function refuseIfOver(dir, claimId) {
   if (state === 'done') throw new Refused(`Claim ${claimId} is already finished; its write access has ended. Stop here.`);
   if (state === 'released') throw new Refused(`Claim ${claimId} was handed back; this copy no longer holds it. Stop here.`);
   if (state === 'lost') throw new Refused(`The lease on claim ${claimId} is gone: ${(readMarker(dir, 'LOST') ?? '').trim()} Stop here.`);
+  if (state === 'hedge-expired') throw new Refused(`Investigation on ${claimId} is parked pending an owner decision. Read .superpose/NOTICES.md.`);
 }
 
 function gitHead(dir) {
@@ -283,6 +289,20 @@ async function finding({ dir, claim, api }, values, positionals) {
     out.push(`It is offered to ${named}. If a checker verifies it, their agents are told.`);
   }
   say(out.join('\n'));
+}
+
+async function article({ dir, claim, api }, values, positionals) {
+  refuseIfOver(dir, claim.claim);
+  const statement = positionals.join(' ').trim();
+  if (!statement) throw new UsageError('State the product promise you want to propose.');
+  const result = await api.proposeArticle(claim.lease, { finder: claim.claim, statement,
+    ...(values.check ? { check: values.check } : {}),
+    ...(values['check-file'] ? { checkFile: values['check-file'] } : {}),
+    ...(values.replaces ? { replaces: values.replaces } : {}),
+  });
+  if (!result.ok) throw new Refused(`Could not propose the article. ${explainError(result)}`);
+  if (values.json) return say(JSON.stringify(result.data));
+  say(`Proposed article ${result.data.id}: “${statement}”. It awaits owner adoption and does not block work.\nKeep check proposals outside constitution/: those files belong to the owner.`);
 }
 
 async function replan({ dir, claim, api }, values) {
@@ -437,7 +457,7 @@ async function done({ dir, claim, api }, values) {
       }
       // The gate on the pair: nothing finishes that breaks the constitution
       // together with the line.
-      if (row.verdict === 'checks-passed') {
+      if (row.verdict === 'checks-passed' || row.checks?.status === 'skipped') {
         const paired = await pairFor(api, claim, head, Number(values.wait ?? 150));
         const pair = paired?.pair;
         if (pair?.status === 'broken') {
@@ -582,6 +602,7 @@ function prePush({ dir, claim }) {
   if (state === 'done') problems.push(`Claim ${claim.claim} is finished; its write access has ended.`);
   if (state === 'released') problems.push(`Claim ${claim.claim} was handed back; this copy no longer holds it.`);
   if (state === 'lost') problems.push(`The lease on claim ${claim.claim} is gone. Stop working on it.`);
+  if (state === 'hedge-expired') problems.push(`Investigation on ${claim.claim} is parked pending an owner decision.`);
   if (state === 'stale') {
     problems.push(
       `Claim ${claim.claim} is STALE: an assumption it rests on was shown to be false, so pushes are refused until you re-plan.\n` +
@@ -683,7 +704,7 @@ async function hook(values, positionals) {
 
 // ---- main ------------------------------------------------------------------------------------------
 
-const COMMANDS = { status, assume, finding, replan, done, release, notices };
+const COMMANDS = { status, assume, finding, article, replan, done, release, notices };
 
 async function main(argv) {
   let parsed;

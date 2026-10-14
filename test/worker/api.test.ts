@@ -84,7 +84,7 @@ describe('the API in front of the graph', () => {
 
     // d1 has landed (it finished, so the builds-on claim could start): it is
     // reported as served work at risk, not marked stale.
-    const impact = await api('GET', `${p.g}/findings/${fid}/impact`);
+    const impact = await api('GET', `${p.g}/findings/${fid}/impact`, ADMIN);
     expect(impact.data.affected.sort()).toEqual([p.onA[1].id, p.onA[2].id, p.builtOn.id].sort());
     expect(impact.data.landedAtRisk).toEqual([p.onA[0].id]);
     expect(impact.data.cost).toBe(1);

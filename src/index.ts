@@ -27,6 +27,9 @@ const STATUS: Record<string, number> = {
   empty_line: 409,
   unknown_commit: 404,
   no_repo: 409,
+  busy: 409,
+  hedge_expired: 409,
+  constitution_pending: 409,
 };
 
 type Handler = (ctx: {
@@ -35,6 +38,7 @@ type Handler = (ctx: {
   query: URLSearchParams;
   body: Record<string, unknown>;
   bearer: string;
+  privileged: boolean;
 }) => Promise<Result<unknown>>;
 
 interface Route {
@@ -58,11 +62,11 @@ function route(method: string, path: string, auth: Route['auth'], handler: Handl
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
-route('GET', '/api/graphs/:gid/snapshot', 'public', ({ graph }) => graph.snapshot());
-route('GET', '/api/graphs/:gid/ready', 'public', ({ graph }) => graph.ready());
+route('GET', '/api/graphs/:gid/snapshot', 'public', ({ graph, bearer, privileged }) => privileged ? graph.snapshot() : graph.publicSnapshot(bearer));
+route('GET', '/api/graphs/:gid/ready', 'public', ({ graph, privileged }) => privileged ? graph.ready() : graph.publicReady());
 // Why is a file the way it is: GET /api/graphs/<g>/why?path=src/x.ts[&line=main]
-route('GET', '/api/graphs/:gid/why', 'public', ({ graph, query }) => graph.why(query.get('path') ?? '', query.get('line') || undefined));
-route('GET', '/api/graphs/:gid/findings/:fid/impact', 'public', ({ graph, params }) => graph.impactOf(params.fid!));
+route('GET', '/api/graphs/:gid/why', 'public', ({ graph, query, bearer, privileged }) => graph.why(query.get('path') ?? '', query.get('line') || undefined, bearer, privileged));
+route('GET', '/api/graphs/:gid/findings/:fid/impact', 'public', ({ graph, params, bearer, privileged }) => graph.impactOf(params.fid!, bearer, privileged));
 
 route('DELETE', '/api/graphs/:gid', 'admin', ({ graph, params }) => graph.destroy(params.gid!));
 // With `constitution: true`: an article every claim on the line rests on by
@@ -81,6 +85,7 @@ route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
     restsOn: strs(body.restsOn),
     requires: strs(body.requires),
     baseSha: str(body.baseSha) || undefined,
+    hedgeOn: str(body.hedgeOn) || undefined,
   }),
 );
 route('POST', '/api/graphs/:gid/claims/:id/land', 'admin', ({ graph, params }) => graph.land(params.id!));
@@ -92,11 +97,26 @@ route('POST', '/api/graphs/:gid/landings', 'admin', async ({ graph, params }) =>
 });
 route('POST', '/api/graphs/:gid/findings/:fid/verify', 'admin', ({ graph, params }) => graph.verifyFinding(params.fid!));
 route('POST', '/api/graphs/:gid/findings/:fid/refute', 'admin', ({ graph, params }) => graph.refuteFinding(params.fid!));
+route('POST', '/api/graphs/:gid/findings/:fid/publish', 'admin', ({ graph, params, body }) => graph.publishFinding(params.fid!, strs(body.lines)));
+route('POST', '/api/graphs/:gid/findings/:fid/check', 'admin', ({ graph, params }) => graph.startFindingCheck(params.gid!, params.fid!));
+route('POST', '/api/graphs/:gid/articles', 'lease', ({ graph, body, bearer }) =>
+  graph.proposeArticle(str(body.finder), bearer, { statement: str(body.statement), check: str(body.check) || undefined, checkFile: str(body.checkFile) || undefined, replaces: str(body.replaces) || undefined }),
+);
+route('POST', '/api/graphs/:gid/articles/:id/adopt', 'admin', ({ graph, params, body }) =>
+  graph.adoptArticle(params.gid!, params.id!, { check: str(body.check) || undefined, checkFile: str(body.checkFile) || undefined, judged: body.judged === true }),
+);
+route('POST', '/api/graphs/:gid/articles/:id/reject', 'admin', ({ graph, params, body }) => graph.rejectArticle(params.id!, str(body.reason)));
+route('POST', '/api/graphs/:gid/decisions/:id/answer', 'admin', ({ graph, params, body }) =>
+  graph.decide(params.id!, body.answer === 'continue-investigation' ? 'continue-investigation' : body.answer === 'park-investigation' ? 'park-investigation' : undefined, str(body.reason)),
+);
+route('POST', '/api/graphs/:gid/hedges/expire', 'admin', ({ graph }) => graph.expireHedges());
 
 // With `from`: fork that line into a new one (another option of a decision).
 // Without: label an existing line (e.g. say which option main is).
 route('POST', '/api/graphs/:gid/lines/:line', 'admin', ({ graph, params, body }) => {
-  const labels = { decision: str(body.decision) || undefined, option: str(body.option) || undefined };
+  const labels = { decision: str(body.decision) || undefined, option: str(body.option) || undefined,
+    sharing: body.sharing === 'isolated' ? 'isolated' as const : body.sharing === 'project' ? 'project' as const : undefined,
+    group: str(body.group) || undefined };
   if (!str(body.from)) return graph.labelLine(params.gid!, params.line!, labels);
   return graph.createLine(params.gid!, { name: params.line!, from: str(body.from), ...labels });
 });
@@ -136,8 +156,8 @@ route('POST', '/api/graphs/:gid/claims/:id/replan', 'lease', ({ graph, params, b
     restsOn: strs(body.restsOn),
   }),
 );
-route('POST', '/api/graphs/:gid/findings', 'lease', ({ graph, body, bearer }) =>
-  graph.fileFinding(str(body.finder), bearer, {
+route('POST', '/api/graphs/:gid/findings', 'lease', ({ graph, params, body, bearer }) =>
+  graph.fileFinding(params.gid!, str(body.finder), bearer, {
     statement: str(body.statement),
     effect: body.effect === 'helps' ? 'helps' : 'contradicts',
     targets: strs(body.targets),
@@ -250,7 +270,9 @@ export default {
     }
 
     const graph = env.GRAPH.get(env.GRAPH.idFromName(params.gid!));
-    const result = await r.handler({ graph, params, query: url.searchParams, body, bearer });
+    const privileged = r.auth === 'admin' || (r.auth === 'public' &&
+      ((await sameSecret(bearer, env.ADMIN_TOKEN)) || (await sameSecret(bearer, env.AGENT_KEY))));
+    const result = await r.handler({ graph, params, query: url.searchParams, body, bearer, privileged });
     if (result.ok) return json(200, result.value ?? null);
     return json(STATUS[result.code] ?? 400, { error: result.code, message: result.message });
   },

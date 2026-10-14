@@ -27,7 +27,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { REPO_DIR, UsageError, agentEnv, atomicWrite, formatDuration, git, gitAsync, readJson, shortSha } from './lib.mjs';
+import { REPO_DIR, UsageError, agentEnv, atomicWrite, formatDuration, git, gitAsync, gitAuthEnv, installGitAuth, readJson, shortSha } from './lib.mjs';
+import { prepareHostedOrigin } from './hosted-origin.mjs';
 
 const USAGE = `Usage: node runner/plain.mjs <scenario dir> [options]
 
@@ -62,6 +63,7 @@ const OPTIONS = {
   work: { type: 'string' },
   runs: { type: 'string' },
   claude: { type: 'string', default: 'claude' },
+  'hosted-config': { type: 'string' },
   'ask-both-ways': { type: 'boolean', default: false },
   hidden: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
@@ -401,7 +403,7 @@ class PlainRunner {
     if (this.plan.forks.length) {
       this.log(null, `warning: plan.json builds one decision two ways (lines ${this.plan.forks.join(', ')}); plain git has one main, so every claim is a task on it`);
     }
-    this.seed();
+    await this.seed();
     process.on('SIGINT', () => this.interrupt());
     process.on('SIGTERM', () => this.interrupt());
     this.slots = Array.from({ length: opts.agents }, (_, i) => ({ n: i + 1, name: `${opts.name}-${i + 1}`, child: null, busy: null }));
@@ -422,7 +424,7 @@ class PlainRunner {
 
   // One commit on main with the scenario's seed, in a bare repository that,
   // like a protected branch on a git host, refuses force pushes and deletions.
-  seed() {
+  async seed() {
     const { workDir, scenarioDir } = this.opts;
     git(workDir, ['init', '--quiet', '--bare', '--initial-branch=main', this.origin]);
     git(this.origin, ['config', 'receive.denyNonFastForwards', 'true']);
@@ -433,7 +435,14 @@ class PlainRunner {
     if (existsSync(seedDir)) cpSync(seedDir, tmp, { recursive: true });
     git(tmp, ['add', '-A']);
     git(tmp, ['-c', 'user.name=Plain-git planner', '-c', 'user.email=planner@plain-git.invalid', 'commit', '--quiet', '--allow-empty', '-m', `Start the ${this.plan.name} project`]);
-    git(tmp, ['push', '--quiet', this.origin, 'HEAD:refs/heads/main']);
+    if (this.opts.hostedConfig) {
+      const hosted = readJson(this.opts.hostedConfig);
+      const prepared = await prepareHostedOrigin({ seedCheckout: tmp, url: hosted.url, graphId: hosted.graphId, adminToken: hosted.adminToken });
+      this.origin = prepared.remoteUrl;
+      this.gitToken = prepared.auth.token;
+      Object.assign(process.env, gitAuthEnv(this.gitToken));
+      atomicWrite(this.opts.hostedConfig, JSON.stringify({ ...hosted, gitToken: this.gitToken }), 0o600);
+    } else git(tmp, ['push', '--quiet', this.origin, 'HEAD:refs/heads/main']);
     const sha = git(tmp, ['rev-parse', 'HEAD']).stdout.trim();
     const files = lines(git(tmp, ['ls-files']).stdout).length;
     rmSync(tmp, { recursive: true, force: true });
@@ -506,7 +515,7 @@ class PlainRunner {
     task.endedAt = Date.now();
     task.ms = task.endedAt - task.startedAt;
     task.result = outcome.result?.subtype ?? null;
-    task.cost = outcome.cost ?? 0;
+    task.cost = outcome.cost ?? null;
     task.turns = outcome.result?.num_turns ?? outcome.turns ?? 0;
     task.exitCode = outcome.code;
     task.signal = outcome.signal;
@@ -519,6 +528,7 @@ class PlainRunner {
   async prepare(slot, task, dir) {
     rmSync(dir, { recursive: true, force: true });
     await gitAsync(this.opts.workDir, ['clone', '--quiet', this.origin, task.key]);
+    if (this.gitToken) installGitAuth(dir, this.origin, this.gitToken);
     git(dir, ['config', 'user.name', slot.name]);
     git(dir, ['config', 'user.email', this.email(slot)]);
     git(dir, ['checkout', '--quiet', '-b', `task/${task.key}`, '--track', 'origin/main']);
@@ -631,8 +641,8 @@ class PlainRunner {
       for (const part of event.message?.content ?? []) if (part.type === 'tool_use') outcome.turns++;
     } else if (event.type === 'result') {
       outcome.result = event;
-      outcome.cost = event.total_cost_usd ?? 0;
-      this.log(slot.name, `agent ended: ${event.subtype}, ${event.num_turns} turns, $${(event.total_cost_usd ?? 0).toFixed(3)}`);
+      outcome.cost = event.total_cost_usd ?? null;
+      this.log(slot.name, `agent ended: ${event.subtype}, ${event.num_turns} actions${outcome.cost === null ? ', dollar usage unavailable' : `, $${outcome.cost.toFixed(3)}`}`);
     }
   }
 
@@ -783,7 +793,7 @@ class PlainRunner {
       agent: t.agent ?? null,
       status: t.status,
       why: t.why ?? null,
-      cost: t.cost ?? 0,
+      cost: t.cost ?? null,
       turns: t.turns ?? 0,
       ms: t.ms ?? 0,
       agentMs: t.agentMs ?? 0,
@@ -808,7 +818,7 @@ class PlainRunner {
       failed: failed.length,
       blocked: blocked.length,
       notStarted: count('not started'),
-      cost: sum('cost'),
+      cost: tasks.some(t => t.agent && t.cost === null) ? null : sum('cost'),
       turns: sum('turns'),
       commits: tasks.reduce((a, t) => a + t.commits.length, 0),
       ms: sum('ms'),
@@ -844,7 +854,7 @@ class PlainRunner {
     for (const t of tasks) {
       out.push(
         `  ${(t.agent ?? '-').padEnd(12)} ${t.key.padEnd(width)}  ${t.status.padEnd(11)} ${(t.agent ? formatDuration(t.ms) : '').padStart(6)}` +
-          (t.agent ? `  turns ${t.turns}  $${t.cost.toFixed(3)}  ${plural(t.commits.length, 'commit')}` : '') +
+          (t.agent ? `  actions ${t.turns}  ${t.cost === null ? 'cost unavailable' : `$${t.cost.toFixed(3)}`}  ${plural(t.commits.length, 'commit')}` : '') +
           (t.why ? `  (${t.why})` : '') +
           (t.waitsFor ? `  waits for ${t.waitsFor.join(', ')}` : '') +
           (t.transcript ? `  ${rel(t.transcript)}` : ''),
@@ -854,7 +864,7 @@ class PlainRunner {
     if (visible) out.push(`  Visible tests on main ${shortSha(mainSha)}${visible.command ? ` (${visible.command})` : ''}: ${visible.status}`);
     if (hidden) out.push(`  Hidden check: ${hidden.status}`);
     out.push(
-      `  Total: $${totals.cost.toFixed(3)}, ${plural(totals.turns, 'turn')}, ${plural(totals.commits, 'commit')}, ` +
+      `  Total: ${totals.cost === null ? 'cost unavailable' : `$${totals.cost.toFixed(3)}`}, ${plural(totals.turns, 'action')}, ${plural(totals.commits, 'commit')}, ` +
         `wall ${formatDuration(totals.wallMs)}`,
       `  Summary: ${rel(join(opts.runsDir, 'summary.json'))}`,
     );
@@ -917,6 +927,7 @@ async function main() {
       workDir,
       runsDir,
       claudeBin,
+      hostedConfig: values['hosted-config'] ? resolve(values['hosted-config']) : undefined,
       check: checkConfig(join(scenarioDir, 'seed')),
       askBothWays: values['ask-both-ways'],
       hiddenCheck: values.hidden ? resolve(values.hidden) : undefined,

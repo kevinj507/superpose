@@ -2,6 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { ArtifactsHost } from './artifacts-host';
 import { readCheckConfig, runCheck, type CheckConfig, type ExecJob } from './core/checks';
 import { checkPair } from './core/pair';
+import { checkFinding, type FindingCheckContext } from './core/finding-check';
 import { parseRepoName } from './core/repos';
 import type { CheckRun, PairCheck, PushRecord, RepoRef } from './core/types';
 
@@ -17,6 +18,7 @@ export interface ArtifactsEvent {
     before: string;
     after: string;
     commits?: { id: string; message: string }[];
+    finding?: string;
   };
 }
 
@@ -32,6 +34,28 @@ export type HandledPush =
 export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
   async run(event: WorkflowEvent<ArtifactsEvent>, step: WorkflowStep) {
     const host = new ArtifactsHost(this.env.ARTIFACTS!);
+    if (event.payload.type === FINDING_CHECK) {
+      const name = parseRepoName(event.payload.source.repoName);
+      const finding = event.payload.payload.finding;
+      if (!name || name.kind !== 'claim' || !finding) return { ignored: 'not a finding check' };
+      const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(name.graph));
+      const context = await step.do('capture the finding and its code versions', async (): Promise<FindingCheckContext | null> => {
+        const r = await stub.findingCheckContext(name.graph, finding);
+        return r.ok ? { finding: r.value.finding, evidence: r.value.evidence, line: r.value.line, heads: r.value.heads, articles: r.value.articles } : null;
+      });
+      if (!context) return { ignored: 'this finding cannot currently be checked' };
+      const config = await step.do('read setup from the recorded line', () => readCheckConfig(host, context.line.name, context.evidence.lineHead));
+      const settings = config ?? { check: '', timeoutSeconds: 300 };
+      const evidence = await step.do('check the owner articles on the named combination', {
+        timeout: `${settings.timeoutSeconds * (context.articles.length + 1) * 2 + 480} seconds`,
+      }, () => checkFinding(host,
+        (job: ExecJob) => this.env.CHECKER.get(this.env.CHECKER.idFromName(`finding:${name.graph}:${finding}:${event.instanceId}`)).run(job), context, settings));
+      const status = await step.do('settle only if the recorded inputs still apply', async () => {
+        const r = await stub.recordFindingCheck(finding, evidence);
+        return r.ok ? r.value.status : 'unverified';
+      });
+      return { graph: name.graph, finding, status };
+    }
     // A landing moved the line: a head already checked on its own is paired
     // with the line again, and only that.
     if (event.payload.type === PAIR_RECHECK) {
@@ -43,15 +67,14 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
         const r = await stub.pushRow(name.id, sha);
         return r.ok ? r.value : null;
       });
-      if (!row?.accepted || row.verdict !== 'checks-passed') return { ignored: `${sha} is not a checked head of ${name.id}` };
+      if (!row?.accepted || (row.verdict !== 'checks-passed' && row.checks?.status !== 'skipped')) return { ignored: `${sha} is not a checked head of ${name.id}` };
       const repo = await step.do('find the repo', async () => {
         const r = await stub.pairContext(name.id);
         return r.ok && !('skip' in r.value) ? r.value.claim : null;
       });
       if (!repo) return { ignored: `nothing to pair for ${name.id}` };
       const config = await step.do('read the checks from the commit', () => readCheckConfig(host, repo.name, sha));
-      if (!config) return { ignored: 'no checks declared' };
-      const pair = await this.pairStep(step, host, { graph: name.graph, claim: name.id, sha, config, runId: event.instanceId });
+      const pair = await this.pairStep(step, host, { graph: name.graph, claim: name.id, sha, config: config ?? { check: '', timeoutSeconds: 300 }, runId: event.instanceId });
       return { graph: name.graph, claim: name.id, pair };
     }
 
@@ -82,7 +105,8 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       await step.do('record that no checks are declared', () =>
         recordCheck({ status: 'skipped', startedAt: now, finishedAt: now, log: 'no superpose.json and no npm test script' }),
       );
-      return handled;
+      const pair = await this.pairStep(step, host, { graph, claim, sha: record.sha, config: { check: '', timeoutSeconds: 300 }, runId: event.instanceId });
+      return { ...handled, pair };
     }
     // Only one run per commit: another flow for the same commit (a re-check,
     // or the platform's own check at finish) leaves it to this one.
@@ -152,7 +176,7 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
           const exec = (job: ExecJob) => this.env.CHECKER.get(this.env.CHECKER.idFromName(`pair:${graph}:${claim}:${sha}:${attempt}`)).run(job);
           const result = await checkPair(host, exec, { ...ctx, sha, config });
           if (result.status === 'error') throw new Error(`the pair check could not run: ${result.log ?? ''}`.slice(0, 500));
-          return result;
+          return { ...result, articles: ctx.articles.map((a) => a.id) };
         },
       );
     } catch (err) {
@@ -170,6 +194,11 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
 // A pair re-check the platform asks for after a landing, in the shape the
 // push Workflow takes: the claim's repo and the head to judge again.
 export const PAIR_RECHECK = 'superpose.pair.recheck';
+export const FINDING_CHECK = 'superpose.finding.check';
+
+export function findingCheckEvent(repoName: string, finding: string): ArtifactsEvent {
+  return { type: FINDING_CHECK, source: { repoName }, payload: { ref: 'refs/heads/main', before: '', after: '', finding } };
+}
 
 export function pairRecheck(repoName: string, sha: string): ArtifactsEvent {
   return {
