@@ -4,7 +4,7 @@ import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { prepareChallengeFixture } from '../runner/challenge-fixtures.mjs';
+import { prepareChallengeFixture, digest } from '../runner/challenge-fixtures.mjs';
 import { verifyChallengeEvidence } from '../runner/challenge-verifier.mjs';
 import { evaluateChallenge } from '../runner/challenge-acceptance.mjs';
 
@@ -31,6 +31,21 @@ test('verified evidence binds exact incident, workload, source, configuration an
     assert.equal((await verifyChallengeEvidence({...f.bundle,simultaneousFaults:true})).status,'inconclusive');
     assert.equal((await verifyChallengeEvidence({...f.bundle,workload:{...f.bundle.workload,incidentId:'other'}})).status,'inconclusive');
   }
+}, 30000);
+
+test('a captured incident with both real faults stays inconclusive without a cause-selector flag', async () => {
+  const f = await fixture('A');
+  onTestFinished(() => rm(f.outDir, { recursive: true, force: true }));
+  const applied = { ...f.bundle.applied, revision: 'both-faults', capacity: 1 };
+  const trace = { ...f.bundle.trace, appliedRevision: applied.revision };
+  const binding = { ...f.bundle.binding, configRevision: applied.revision, traceDigest: digest(trace) };
+  const bundle = { ...f.bundle, applied, trace, binding };
+  await writeFile(join(f.evidenceDir, 'release.json'), JSON.stringify({ binding, workload: bundle.workload, applied, trace, incidentFiles: bundle.incidentFiles }));
+  const result = await verifyChallengeEvidence(bundle);
+  assert.equal(result.status, 'inconclusive');
+  const replay = result.probes.find(p => p.name === 'recorded-code-replay');
+  assert.ok(replay.guardCost > replay.budgetLimit);
+  assert.equal(replay.capacityRefusal, true);
 }, 30000);
 
 test('seed fails oracle; exact reference implementation passes both worlds using fresh module processes', async () => {

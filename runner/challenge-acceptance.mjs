@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { verifyChallengeEvidence } from './challenge-verifier.mjs';
 
+export const ACCEPTANCE_VERSION = 'cause-challenge-contract-v2';
 const ok = (name, pass, detail = '') => ({ name, pass: Boolean(pass), detail });
 function fresh(checkout, source, payload) {
   const script = `const m=await import(${JSON.stringify(pathToFileURL(resolve(checkout, source)).href)}+'?run='+Date.now()+Math.random()); const p=JSON.parse(process.env.CHALLENGE_INPUT); if(p.options?.effects?.__map)p.options.effects=new Map(); let out; if(p.action==='batch')out=await m.runBatch(p.jobs,p.options); else if(p.action==='diagnose')out=m.diagnose(p.record,p.evidence); else if(p.action==='recover')out=m.recover(p.interruption,()=>({retried:true})); else if(p.action==='cost')out=m.estimateCost(p.requests); else if(p.action==='csv')out=m.exportCsv(p.rows); process.stdout.write(JSON.stringify(out));`;
@@ -20,6 +21,8 @@ export async function evaluateChallenge(checkout, { world, evidence }) {
   const expected = world === 'A' ? 'refuted' : world === 'B' ? 'confirmed' : 'invalid-world';
   checks.push(ok('qualified-exact-evidence', oracle.status === expected && oracle.checked === true && sameBinding(oracle.binding, evidence?.binding), oracle.reason ?? 'world must be A or B'));
   const report = oracle;
+  const record = {...evidence.workload,binding:report.binding};
+  const envelope = report => ({record,report,applied:evidence.applied,trace:evidence.trace,incidentFiles:evidence.incidentFiles});
   const alteredReports = [
     ['unknown-incident', { ...report, binding: { ...report.binding, incidentId: 'moved-incident' } }],
     ['unchecked-evidence', { ...report, checked: false }],
@@ -27,12 +30,12 @@ export async function evaluateChallenge(checkout, { world, evidence }) {
     ['moved-binding', { ...report, binding: { ...report.binding, configRevision: 'moved-revision' } }],
   ];
   for (const [label, altered] of alteredReports) {
-    try { const diagnosis = fresh(checkout, 'src/diagnosis.mjs', { action: 'diagnose', record: { ...evidence?.workload, binding: evidence?.binding }, evidence: altered }); checks.push(ok(label, diagnosis?.cause === 'unresolved')); }
+    try { const diagnosis = fresh(checkout, 'src/diagnosis.mjs', { action: 'diagnose', record, evidence: envelope(altered) }); checks.push(ok(label, diagnosis?.cause === 'unresolved')); }
     catch (e) { checks.push(ok(label, false, e.message)); }
   }
   try {
-    const good = fresh(checkout, 'src/diagnosis.mjs', { action: 'diagnose', record: { ...evidence?.workload, binding: evidence?.binding }, evidence: report });
-    checks.push(ok('diagnosis-matches-verified-cause', good?.cause === oracle.cause && good?.confidence === 'verified'));
+    const good = fresh(checkout, 'src/diagnosis.mjs', { action: 'diagnose', record, evidence: envelope(report) });
+    checks.push(ok('diagnosis-matches-verified-cause', good?.cause === oracle.cause && good?.confidence === 'verified' && good?.incidentId === record.incidentId && sameBinding(good?.binding,report.binding)));
   } catch (e) { checks.push(ok('diagnosis-matches-verified-cause', false, e.message)); }
   try {
     const requests = [{ id:'same',model:'small',input:1000,output:500 },{ id:'same',model:'small',input:1000,output:500 },{ model:'small',input:1000,output:500 }];
@@ -77,7 +80,7 @@ export async function evaluateChallenge(checkout, { world, evidence }) {
     for(const[path,hash]of Object.entries(evidence.protectedFiles??{})){const text=await readFile(resolve(checkout,path),'utf8');if(createHash('sha256').update(text).digest('hex')!==hash)changed.push(path);}
     checks.push(ok('constitution-preserved', Object.keys(evidence.protectedFiles??{}).length>0 && changed.length===0,JSON.stringify(changed)));
   } catch (e) { checks.push(ok('constitution-preserved', false, e.message)); }
-  return { pass: checks.every(c=>c.pass), checks, evidence: oracle };
+  return { acceptanceVersion: ACCEPTANCE_VERSION, pass: checks.every(c=>c.pass), checks, evidence: oracle };
 }
 
 async function cli(argv) {
