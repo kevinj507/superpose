@@ -10,6 +10,7 @@ import type {
   EventType,
   Finding,
   FindingEvidence,
+  ExternalFindingEvidence,
   GraphNode,
   GraphEvent,
   KeptBranch,
@@ -148,7 +149,7 @@ export class Engine {
       (!line || n.line === line || (inherited ? inherited.includes(n.id) : !n.line)));
   }
 
-  proposeArticle(id: string, token: string, input: { statement: string; check?: string; checkFile?: string; replaces?: string }): Assumption {
+  proposeArticle(id: string, token: string, input: { statement: string; check?: string; checkFile?: string; sourceFile?: string; sourceSha?: string; replaces?: string }): Assumption {
     const c = this.held(id, token);
     const statement = input.statement.trim();
     if (!statement || statement.length > 4000) throw new EngineError('bad_request', 'an article needs a statement of at most 4000 characters');
@@ -159,7 +160,7 @@ export class Engine {
       ...(input.check ? { check: input.check } : {}),
       ...(input.checkFile ? { checkFile: input.checkFile } : {}),
       ...(input.replaces ? { replaces: input.replaces } : {}),
-      proposal: { by: id, at: this.clock.now() },
+      proposal: { by: id, at: this.clock.now(), ...(input.sourceFile && input.sourceSha ? { source: { file: input.sourceFile, sha: input.sourceSha } } : {}) },
     };
     this.store.putNode(proposal);
     this.store.addEdge({ source: proposal.id, target: id, purpose: 'related to' });
@@ -926,7 +927,7 @@ export class Engine {
       ? f.where.map((id) => this.store.getNode(id)).filter((n): n is Claim => n?.kind === 'claim' && n.status !== 'open')
       : this.downstreamOf(f.targets);
     for (const c of reached) {
-      if (c.status === 'superseded' || !this.findingVisibleTo(f, c.line) || (c.id === f.finder && f.evidence?.status !== 'confirmed')) continue;
+      if (c.status === 'superseded' || !this.findingVisibleTo(f, c.line) || (c.id === f.finder && f.evidence?.status !== 'confirmed' && f.externalEvidence?.status !== 'confirmed')) continue;
       if (c.status === 'landed') landedAtRisk.push(c.id);
       else {
         affected.push(c.id);
@@ -963,6 +964,32 @@ export class Engine {
     }
     this.applyDoubt(f, impact);
     return impact;
+  }
+
+  recordExternalCheck(findingId: string, report: Omit<ExternalFindingEvidence, 'at'>): Impact | null {
+    const f = this.finding(findingId);
+    if (f.status !== 'unverified') throw new EngineError('settled', `finding ${f.id} is ${f.status}`);
+    if (f.effect !== 'contradicts') throw new EngineError('bad_request', 'external checks require an unresolved contradiction');
+    const fields = ['incident_id', 'workload_digest', 'code_sha', 'config_revision', 'trace_digest', 'verifier_version'] as const;
+    if (!report || !['confirmed', 'refuted', 'inconclusive'].includes(report.status) || !report.binding || fields.some((key) => typeof report.binding[key] !== 'string' || !report.binding[key].trim()) || typeof report.reason !== 'string' || !report.reason.trim() || !Array.isArray(report.probes) || report.probes.length === 0 || report.probes.some((probe) => typeof probe !== 'string' || !probe.trim())) {
+      throw new EngineError('bad_request', 'external check needs a checked status, complete binding, reason, and string probes');
+    }
+    const evidence: ExternalFindingEvidence = { ...report, at: this.clock.now() };
+    const next = { ...f, externalEvidence: evidence };
+    this.store.putNode(next);
+    const relevant = f.where ?? this.downstreamOf(f.targets).map((c) => c.id);
+    const recipients = [...new Set([f.finder, ...relevant.filter((id) => {
+      const c = this.claimNode(id);
+      return f.publishedTo?.includes(c.line);
+    })])];
+    this.emit('finding.external_checked', recipients, { finding: f.id, status: evidence.status, binding: evidence.binding, reason: evidence.reason, probes: evidence.probes });
+    if (evidence.status === 'confirmed') return this.verifyFinding(f.id);
+    if (evidence.status === 'refuted') {
+      this.store.putNode({ ...next, status: 'refuted' });
+      this.parkRefutedHedges(next);
+      this.emit('finding.refuted', [f.finder], { finding: f.id, evidence: true, external: true });
+    }
+    return null;
   }
 
   // What a verified contradiction does to the claims it reaches: in-flight

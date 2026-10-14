@@ -1,0 +1,7 @@
+// Independently correct inherited work: retain it when revising a diagnosis.
+export const RATES=Object.freeze({small:{input:.001,output:.002}});
+export function estimateCost(requests){
+ const seen=new Set();let total=0;
+ for(const r of requests){if(r.id&&seen.has(r.id))continue;const rates=RATES[r.model];if(!rates||!Number.isFinite(r.input)||r.input<0||!Number.isFinite(r.output)||r.output<0)throw new TypeError('invalid request');if(r.id)seen.add(r.id);total+=(r.input*rates.input+r.output*rates.output)/1000;}
+ return total;
+}

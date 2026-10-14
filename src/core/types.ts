@@ -145,7 +145,7 @@ export interface Assumption {
   check?: string; // a command, run at the repo root, e.g. "node --test constitution/see-is-pay.test.js"
   line?: string;
   checkFile?: string;
-  proposal?: { by: string; at: number; resolution?: 'adopted' | 'rejected'; reason?: string; atSha?: string };
+  proposal?: { by: string; at: number; resolution?: 'adopted' | 'rejected'; reason?: string; atSha?: string; source?: { file: string; sha: string } };
   supersededBy?: string;
   supersededOn?: Record<string, string>;
   replaces?: string;
@@ -190,6 +190,15 @@ export interface Finding {
   publishedTo?: string[];
   decision?: string;
   evidence?: FindingEvidence;
+  externalEvidence?: ExternalFindingEvidence;
+}
+
+export interface ExternalFindingEvidence {
+  status: 'confirmed' | 'refuted' | 'inconclusive';
+  binding: { incident_id: string; workload_digest: string; code_sha: string; config_revision: string; trace_digest: string; verifier_version: string };
+  reason: string;
+  probes: string[];
+  at: number;
 }
 
 export interface FindingEvidence {
@@ -269,6 +278,7 @@ export type EventType =
   | 'finding.hedge_expired'
   | 'finding.shared'
   | 'finding.checked'
+  | 'finding.external_checked'
   | 'article.proposed'
   | 'article.adopted'
   | 'article.rejected'

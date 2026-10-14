@@ -6,7 +6,8 @@ import { FakeRepoHost } from './core/fake-host';
 import { landingMessage } from './core/landing';
 import { findingCheckEvent, pairRecheck, syntheticPush } from './push-flow';
 import { lineRepoName, type RepoHost } from './core/repos';
-import type { CheckRun, Decision, FindingEvidence, Line, PairCheck, PushRecord } from './core/types';
+import type { CheckRun, Decision, ExternalFindingEvidence, FindingEvidence, Line, PairCheck, PushRecord } from './core/types';
+import { inScope } from './core/scope';
 import { SqlStore } from './sql-store';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
@@ -74,8 +75,19 @@ export class Graph extends DurableObject<Env> {
     return this.run((e) => e.addAssumption(statement, extra));
   }
 
-  proposeArticle(id: string, token: string, input: { statement: string; check?: string; checkFile?: string; replaces?: string }) {
-    return this.run((e) => e.proposeArticle(id, token, input));
+  async proposeArticle(graph: string, id: string, token: string, input: { statement: string; check?: string; checkFile?: string; sourceFile?: string; replaces?: string }) {
+    return this.runWithRepos(graph, async () => {
+      let sourceSha: string | undefined;
+      if (input.sourceFile) {
+        const claim = this.engine.getClaim(id);
+        if (!claim.repo || !input.sourceFile || input.sourceFile.includes('\\') || input.sourceFile.split('/').some((part) => !part || part === '.' || part === '..') || !inScope(input.sourceFile, claim.scope)) {
+          throw new EngineError('bad_request', 'a proposal source file must be a normalized path inside the claim scope');
+        }
+        sourceSha = await this.repoHost.readHead(claim.repo.name) ?? undefined;
+        if (!sourceSha || await this.repoHost.readFile(claim.repo.name, sourceSha, input.sourceFile) === null) throw new EngineError('bad_request', 'the proposal source file must exist at the claim repository commit');
+      }
+      return this.tx((e) => e.proposeArticle(id, token, { ...input, sourceSha }));
+    });
   }
 
   async adoptArticle(graph: string, id: string, input: { check?: string; checkFile?: string; judged?: boolean }) {
@@ -487,6 +499,10 @@ export class Graph extends DurableObject<Env> {
 
   refuteFinding(findingId: string) {
     return this.run((e) => e.refuteFinding(findingId));
+  }
+
+  externalCheckFinding(findingId: string, report: Omit<ExternalFindingEvidence, 'at'>) {
+    return this.run((e) => e.recordExternalCheck(findingId, report));
   }
 
   expireHedges() {

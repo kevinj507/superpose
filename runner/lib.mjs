@@ -422,7 +422,7 @@ export function latestSeq(index) {
 // said about it before: the kinds below stand until acted on (verdicts on
 // old pushes do not, so they are left out of that first read).
 
-export const STANDING_NOTICES = new Set(['claim.helped', 'claim.stale', 'scope.touched', 'claim.landing_failed', 'reality.at_risk', 'finding.shared', 'article.adopted', 'article.rejected', 'decision.opened', 'decision.answered']);
+export const STANDING_NOTICES = new Set(['claim.helped', 'claim.stale', 'scope.touched', 'claim.landing_failed', 'reality.at_risk', 'finding.shared', 'finding.external_checked', 'article.adopted', 'article.rejected', 'decision.opened', 'decision.answered']);
 
 // What agents must not finish without having read: everything the platform
 // says about the work itself, as opposed to receipts for their own actions.
@@ -570,6 +570,10 @@ export function describeNotice(n, index, claimId) {
         text: `The owner published this finding to your line: “${d.statement ?? ''}”. ${d.status === 'unverified' ? 'Publication is permission to read it, not evidence that it is true. It does not stop your work.' : 'Read the evidence and any accompanying notice about affected work.'}` };
     case 'finding.checked':
       return { ...base, title: `FINDING CHECK: ${d.finding} is ${d.status}`, text: `The owner articles ran on the recorded combination at ${shortSha(d.lineHead ?? '')}.\n${d.log ?? ''}` };
+    case 'finding.external_checked': {
+      const b = d.binding ?? {};
+      return { ...base, title: `INCIDENT CHECK: ${d.finding} is ${d.status}`, text: `${d.reason ?? ''}\nIncident ${b.incident_id ?? '?'}, code ${shortSha(b.code_sha ?? '')}, applied configuration ${b.config_revision ?? '?'}, verifier ${b.verifier_version ?? '?'}. ${d.status === 'inconclusive' ? 'The finding remains unverified.' : 'This verdict concerns the captured incident inputs.'}` };
+    }
     case 'article.adopted':
       return { ...base, title: `CONSTITUTION UPDATED: ${d.article}`, text: `The owner adopted “${d.statement ?? ''}”. Refresh your brief with ${CMD} status and check your approach against it.` };
     case 'article.rejected':

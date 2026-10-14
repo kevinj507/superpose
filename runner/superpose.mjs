@@ -73,7 +73,7 @@ const USAGE = `Usage: ${CMD} <command> [options]
   assume "<statement>"                     declare an assumption your work rests on (or: assume --id <assumption id>)
   finding --contradicts <id> "<statement>" report that an assumption is false, with the evidence
   finding --helps <claim id> "<statement>" offer something useful to another claim
-  article "<product promise>"              propose an article for owner review; optional --check and --check-file
+  article "<product promise>"              propose an article for owner review; optional --check, --check-file and --source-file
   replan [--rests-on <ids|none>] [--add-scope <patterns> | --scope <patterns>] [--statement "<text>"]
                                            re-plan the claim (after it goes stale, or to widen its scope);
                                            --rests-on defaults to the assumptions that still hold; --add-scope
@@ -100,6 +100,7 @@ const OPTIONS = {
   help: { type: 'boolean', short: 'h' },
   check: { type: 'string' },
   'check-file': { type: 'string' },
+  'source-file': { type: 'string' },
   replaces: { type: 'string' },
 };
 
@@ -298,11 +299,12 @@ async function article({ dir, claim, api }, values, positionals) {
   const result = await api.proposeArticle(claim.lease, { finder: claim.claim, statement,
     ...(values.check ? { check: values.check } : {}),
     ...(values['check-file'] ? { checkFile: values['check-file'] } : {}),
+    ...(values['source-file'] ? { sourceFile: values['source-file'] } : {}),
     ...(values.replaces ? { replaces: values.replaces } : {}),
   });
   if (!result.ok) throw new Refused(`Could not propose the article. ${explainError(result)}`);
   if (values.json) return say(JSON.stringify(result.data));
-  say(`Proposed article ${result.data.id}: “${statement}”. It awaits owner adoption and does not block work.\nKeep check proposals outside constitution/: those files belong to the owner.`);
+  say(`Proposed article ${result.data.id}: “${statement}”. It awaits owner adoption and does not block work.\nSource files are immutable proposal references; executable adoption still needs an owner-landed constitution/ file.`);
 }
 
 async function replan({ dir, claim, api }, values) {

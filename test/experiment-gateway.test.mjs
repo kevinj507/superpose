@@ -23,3 +23,19 @@ test('rewrites granted remotes while preserving delegated API authentication',as
     expect(result.git.token).toBe('git-lease');
   }finally{await gateway.close();}
 });
+test('revocation rejects new and body-waiting pushes while preserving reads',async()=>{
+  let releaseBody;
+  const gateway=await groupGateway({graphId:'group-a',url:'https://sp.example',fetchImpl:async()=>Response.json({ok:true})});
+  try{
+    const repo=gateway.register('https://git.example/group-a.git','scoped-write');
+    const pending=fetch(repo+'/git-receive-pack',{method:'POST',body:new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('start'));releaseBody=()=>{controller.enqueue(new TextEncoder().encode('pack'));controller.close();};}}),duplex:'half'});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    gateway.register('https://git.example/group-a.git','renewed-write');
+    expect(gateway.revoke('https://git.example/group-a.git')).toBe(true);
+    gateway.authorize('https://git.example/group-a.git','successor-write');
+    releaseBody();
+    expect((await pending).status).toBe(403);
+    expect((await fetch(repo+'/git-receive-pack',{method:'POST',body:'pack'})).status).toBe(200);
+    expect((await fetch(repo+'/info/refs')).status).toBe(200);
+  }finally{await gateway.close();}
+});

@@ -60,6 +60,39 @@ describe('scoping', () => {
   });
 });
 
+describe('owner external checks', () => {
+  const binding = { incident_id: 'job-17', workload_digest: 'workload-sha256', code_sha: 'code-sha', config_revision: 'cfg-9', trace_digest: 'trace-sha256', verifier_version: 'challenge-v1' };
+  it('stales both the affected finder and dependent claim on a checked contradiction, preserving independent work', () => {
+    const w = hundredClaims();
+    const f = w.engine.fileFinding(w.finder, w.tokens.get(w.finder)!, { statement: 'capacity caused the incident, not budget', effect: 'contradicts', targets: [w.A.id], where: [w.finder, w.direct[0]!.id] }).finding;
+    const independent = w.eightyEight[0]!;
+    const impact = w.engine.recordExternalCheck(f.id, { status: 'confirmed', binding, reason: 'Replay matches the applied capacity policy.', probes: ['capacity isolated', 'budget calculation unchanged'] });
+    expect(impact?.affected.sort()).toEqual([w.finder, w.direct[0]!.id].sort());
+    expect(w.engine.node(w.finder)).toMatchObject({ status: 'stale' });
+    expect(w.engine.node(w.direct[0]!.id)).toMatchObject({ status: 'stale' });
+    expect(w.engine.node(independent)).toMatchObject({ status: 'claimed' });
+    expect(w.engine.node(f.id)).toMatchObject({ status: 'verified', externalEvidence: { status: 'confirmed', binding } });
+  });
+
+  it('records inconclusive provenance without settling, and explicit refutation settles without propagation', () => {
+    const w = hundredClaims();
+    const f = w.engine.fileFinding(w.finder, w.tokens.get(w.finder)!, { statement: 'capacity caused incident', effect: 'contradicts', targets: [w.A.id], where: [w.finder] }).finding;
+    w.engine.recordExternalCheck(f.id, { status: 'inconclusive', binding, reason: 'Trace ambiguous.', probes: ['replay ambiguous'] });
+    expect(w.engine.node(f.id)).toMatchObject({ status: 'unverified', externalEvidence: { status: 'inconclusive' } });
+    expect(w.engine.node(w.finder)).toMatchObject({ status: 'claimed' });
+    const g = w.engine.fileFinding(w.finder, w.tokens.get(w.finder)!, { statement: 'second capacity clue', effect: 'contradicts', targets: [w.A.id], where: [w.finder] }).finding;
+    w.engine.recordExternalCheck(g.id, { status: 'refuted', binding, reason: 'Wrong configuration revision.', probes: ['revision mismatch'] });
+    expect(w.engine.node(g.id)).toMatchObject({ status: 'refuted', externalEvidence: { status: 'refuted' } });
+    expect(w.engine.node(w.finder)).toMatchObject({ status: 'claimed' });
+  });
+
+  it('rejects incomplete external bindings', () => {
+    const w = hundredClaims();
+    const f = w.engine.fileFinding(w.finder, w.tokens.get(w.finder)!, { statement: 'capacity caused incident', effect: 'contradicts', targets: [w.A.id], where: [w.finder] }).finding;
+    expect(() => w.engine.recordExternalCheck(f.id, { status: 'confirmed', binding: { ...binding, code_sha: '' }, reason: 'checked', probes: [] })).toThrow(EngineError);
+  });
+});
+
 describe('the hedge', () => {
   let w: ReturnType<typeof hundredClaims>;
   let findingId: string;

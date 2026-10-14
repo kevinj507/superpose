@@ -54,6 +54,28 @@ async function pushTo(gid: string, claim: string, lease: string, files: Record<s
 }
 
 describe('the API in front of the graph', () => {
+  it('accepts owner-only checked external reports and rejects incomplete bindings', async () => {
+    const g = `/api/graphs/t${++graphSeq}`;
+    const premise = (await api('POST', `${g}/assumptions`, ADMIN, { statement: 'budget guard caused interruption' })).data;
+    const claim = (await api('POST', `${g}/claims`, ADMIN, { statement: 'diagnosis', scope: ['src/diagnosis/**'], restsOn: [premise.id] })).data;
+    const partner = (await api('POST', `${g}/claims`, ADMIN, { statement: 'recovery', scope: ['src/recovery/**'], restsOn: [premise.id] })).data;
+    const independent = (await api('POST', `${g}/claims`, ADMIN, { statement: 'CSV export', scope: ['src/export/**'] })).data;
+    for (const c of [partner, independent]) await api('POST', `${g}/claims/${c.id}/claim`, AGENT, { agent: c.id });
+    const lease = (await api('POST', `${g}/claims/${claim.id}/claim`, AGENT, { agent: 'diagnosis' })).data.token;
+    const filed = await api('POST', `${g}/findings`, lease, { finder: claim.id, statement: 'capacity policy caused interruption', effect: 'contradicts', targets: [premise.id] });
+    const path = `${g}/findings/${filed.data.finding.id}/external-check`;
+    const binding = { incident_id: 'job-17', workload_digest: 'workload-sha256', code_sha: 'code-sha', config_revision: 'cfg-9', trace_digest: 'trace-sha256', verifier_version: 'challenge-v1' };
+    expect((await api('POST', path, AGENT, { status: 'confirmed', binding, reason: 'replay confirms capacity', probes: ['capacity isolated'] })).status).toBe(401);
+    expect((await api('POST', path, ADMIN, { status: 'confirmed', binding: { ...binding, trace_digest: '' }, reason: 'checked', probes: [] })).status).toBe(400);
+    expect((await api('POST', path, ADMIN, { status: 'inconclusive', binding, reason: 'ambiguous replay', probes: ['overlap'] })).status).toBe(200);
+    const snap = await api('GET', `${g}/snapshot`, ADMIN);
+    expect(snap.data.nodes.find((node: any) => node.id === filed.data.finding.id)).toMatchObject({ status: 'unverified', externalEvidence: { status: 'inconclusive', binding } });
+    expect((await api('POST', path, ADMIN, { status: 'confirmed', binding, reason: 'replay confirms capacity', probes: ['capacity isolated'] })).status).toBe(200);
+    const settled = await api('GET', `${g}/snapshot`, ADMIN);
+    expect(settled.data.nodes.filter((node: any) => node.kind === 'claim' && node.status === 'stale').map((node: any) => node.id).sort()).toEqual([claim.id, partner.id].sort());
+    expect(settled.data.nodes.find((node: any) => node.id === independent.id)).toMatchObject({ status: 'claimed' });
+  });
+
   it('requires the admin token to change the plan, the agent key to claim, and nothing to read', async () => {
     const g = `/api/graphs/t${++graphSeq}`;
     expect((await api('POST', `${g}/assumptions`, undefined, { statement: 'x' })).status).toBe(401);

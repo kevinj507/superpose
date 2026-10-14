@@ -1,0 +1,1 @@
+{"setup":"","check":"node --test test/*.test.mjs constitution/*.test.mjs","limits":{"maxFiles":8}}

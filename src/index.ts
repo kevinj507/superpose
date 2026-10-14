@@ -99,8 +99,19 @@ route('POST', '/api/graphs/:gid/findings/:fid/verify', 'admin', ({ graph, params
 route('POST', '/api/graphs/:gid/findings/:fid/refute', 'admin', ({ graph, params }) => graph.refuteFinding(params.fid!));
 route('POST', '/api/graphs/:gid/findings/:fid/publish', 'admin', ({ graph, params, body }) => graph.publishFinding(params.fid!, strs(body.lines)));
 route('POST', '/api/graphs/:gid/findings/:fid/check', 'admin', ({ graph, params }) => graph.startFindingCheck(params.gid!, params.fid!));
-route('POST', '/api/graphs/:gid/articles', 'lease', ({ graph, body, bearer }) =>
-  graph.proposeArticle(str(body.finder), bearer, { statement: str(body.statement), check: str(body.check) || undefined, checkFile: str(body.checkFile) || undefined, replaces: str(body.replaces) || undefined }),
+route('POST', '/api/graphs/:gid/findings/:fid/external-check', 'admin', ({ graph, params, body }) => {
+  const raw = body.binding && typeof body.binding === 'object' ? body.binding as Record<string, unknown> : {};
+  return graph.externalCheckFinding(params.fid!, {
+    status: body.status as 'confirmed' | 'refuted' | 'inconclusive',
+    binding: {
+      incident_id: str(raw.incident_id), workload_digest: str(raw.workload_digest), code_sha: str(raw.code_sha),
+      config_revision: str(raw.config_revision), trace_digest: str(raw.trace_digest), verifier_version: str(raw.verifier_version),
+    },
+    reason: str(body.reason), probes: Array.isArray(body.probes) ? body.probes.map((probe) => typeof probe === 'string' ? probe : '') : [],
+  });
+});
+route('POST', '/api/graphs/:gid/articles', 'lease', ({ graph, params, body, bearer }) =>
+  graph.proposeArticle(params.gid!, str(body.finder), bearer, { statement: str(body.statement), check: str(body.check) || undefined, checkFile: str(body.checkFile) || undefined, sourceFile: str(body.sourceFile) || undefined, replaces: str(body.replaces) || undefined }),
 );
 route('POST', '/api/graphs/:gid/articles/:id/adopt', 'admin', ({ graph, params, body }) =>
   graph.adoptArticle(params.gid!, params.id!, { check: str(body.check) || undefined, checkFile: str(body.checkFile) || undefined, judged: body.judged === true }),

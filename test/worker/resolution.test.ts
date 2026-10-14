@@ -27,6 +27,26 @@ async function take(g: string, line = 'main') {
   return { c, grant };
 }
 describe('resolution over HTTP and durable storage', () => {
+  it('records an in-scope proposal source commit separately from protected owner adoption', async () => {
+    const { gid, g, stub } = await fixture();
+    const { c, grant } = await take(g);
+    let sourceSha = '';
+    await runInDurableObject(stub, async (instance: Graph) => {
+      sourceSha = (await (instance.repoHost as FakeRepoHost).commit(`${gid}.claim.${c.id}`, { 'src/main/proposed-check.test.ts': 'proposal check' })).after;
+    });
+    const article = (await api('POST', `${g}/articles`, grant.token, { finder: c.id, statement: 'Pay the displayed price', check: 'bun test constitution/price.test.ts', sourceFile: 'src/main/proposed-check.test.ts' })).data;
+    expect(article.proposal.source).toEqual({ file: 'src/main/proposed-check.test.ts', sha: sourceSha });
+    expect((await api('POST', `${g}/articles/${article.id}/adopt`, ADMIN)).status).toBe(400);
+    await runInDurableObject(stub, async (instance: Graph) => {
+      (instance.repoHost as FakeRepoHost).commit(`${gid}.line.main`, { 'constitution/price.test.ts': 'owner check' });
+    });
+    const adopted = await api('POST', `${g}/articles/${article.id}/adopt`, ADMIN, { checkFile: 'constitution/price.test.ts' });
+    expect(adopted.status).toBe(200);
+    expect(adopted.data.proposal).toMatchObject({ source: { file: 'src/main/proposed-check.test.ts', sha: sourceSha }, resolution: 'adopted', atSha: expect.any(String) });
+    const outside = await api('POST', `${g}/articles`, grant.token, { finder: c.id, statement: 'Out of scope proposal', sourceFile: 'constitution/forbidden.test.ts' });
+    expect(outside.status).toBe(400);
+  });
+
   it('requires owner adoption and an already landed protected check, then persists the decision', async () => {
     const { gid, g, stub } = await fixture();
     const { c, grant } = await take(g);
