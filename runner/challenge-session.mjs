@@ -83,7 +83,7 @@ export async function startChallengeSession({ cwd, gateway, image, stateDir, rol
   const isolated = await isolatedFactory({ cwd, gateway, image, onEvent: providerEvent });
   sessionId = isolated.sessionId;
   if (!sessionId || !isolated.thread || isolated.model !== MODEL) { await isolated.close?.(); throw new Error('Isolated provider session identity or model check failed'); }
-  state = { status: 'ready', interruptReason: null, actions: budget.actions, sessionId, role: role.id, model: isolated.model, startedAt: null, finishedAt: null };
+  state = { toolchain: isolated.toolchain, status: 'ready', interruptReason: null, actions: budget.actions, sessionId, role: role.id, model: isolated.model, startedAt: null, finishedAt: null };
   function settleActive(result) {
     const p = activeTurn; if (!p) return;
     activeTurn = null; p.resolve(result);

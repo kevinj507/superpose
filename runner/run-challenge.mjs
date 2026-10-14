@@ -11,6 +11,8 @@ import {prepareChallengeFixture,snapshotFiles,digest} from './challenge-fixtures
 import {verifyChallengeEvidence} from './challenge-verifier.mjs';
 import {groupGateway} from './experiment-gateway.mjs';
 import {RoleBudget,startChallengeSession} from './challenge-session.mjs';
+import {isolatedCodex} from './isolated-codex.mjs';
+import {retireLocalContext} from './challenge-handoff.mjs';
 
 const REPO=resolve(new URL('..',import.meta.url).pathname),CLI=join(REPO,'runner/superpose.mjs');
 const IMAGE='sha256:0e5f906573693feaa1e21057ebdcfdb5bd5021f050b2dc7c9deceb629c7da2a8';
@@ -29,13 +31,13 @@ function externalReport(report){return{status:report.status,binding:{incident_id
 const shaFile=p=>createHash('sha256').update(readFileSync(p)).digest('hex');
 function networkGit(cwd,args){return new Promise((resolve,reject)=>{const child=spawn('git',['-C',cwd,...args],{env:process.env,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);const timer=setTimeout(()=>child.kill('SIGKILL'),120000);child.on('error',error=>{clearTimeout(timer);reject(error);});child.on('exit',code=>{clearTimeout(timer);code===0?resolve({stdout,stderr}):reject(Error('Git transport failed '+code+': '+stderr.slice(-700)));});});}
 
-export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld}={}){
+export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld,rehearseExecutor=false}={}){
  const runId=new Date().toISOString().replace(/[-:.]/g,'').slice(0,15).toLowerCase();
  const root=resolve(outDir??join(process.env.BB_THREAD_STORAGE??'/root/.bb/thread-storage','superpose-handoff','challenge-'+runId));mkdirSync(root,{recursive:true});
  const sourceDir=join(root,'source');mkdirSync(sourceDir);
  for(const folder of ['runner','src','scenarios/job-runner'])cpSync(join(REPO,folder),join(sourceDir,folder),{recursive:true});
  cpSync(join(REPO,'docs/experiments/2026-10-14-challenged-assumption.md'),join(sourceDir,'protocol.md'));
- const manifest={runId,sourceCommit:git(REPO,['rev-parse','HEAD']).stdout.trim(),startedAt:Date.now(),scripted,model:scripted?null:'gpt-6-luna',effort:'medium',image:IMAGE,order:ORDER,source:sourceDir,protocolSha256:shaFile(join(sourceDir,'protocol.md')),authorization:'Kevin: proceed to the next experiment; controlled primary-hypothesis coverage required.',episodes:[]};
+ const manifest={runId,rehearseExecutor,sourceCommit:git(REPO,['rev-parse','HEAD']).stdout.trim(),startedAt:Date.now(),scripted,model:scripted?null:'gpt-6-luna',effort:'medium',image:IMAGE,order:ORDER,source:sourceDir,protocolSha256:shaFile(join(sourceDir,'protocol.md')),authorization:'Kevin explicitly authorized the separately labelled restart and complete setup qualification.',episodes:[]};
  atomicWrite(join(root,'manifest.json'),JSON.stringify(manifest,null,2));
  let activeRows=[],cancelled=false;
  const log=(event,extra={})=>{const entry={at:Date.now(),event,...extra};appendFileSync(join(root,'events.jsonl'),JSON.stringify(entry)+'\n');console.log(JSON.stringify(entry));};
@@ -105,6 +107,10 @@ export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld}={})
      const idx=indexSnapshot(snapshot);recordNotices(row.cwd,noticesAbout(idx,row.claimId,{afterSeq:readSeenSeq(row.cwd)}));advanceSeenSeq(row.cwd,snapshot.events.at(-1)?.seq??0);
      atomicWrite(join(row.cwd,'CLAIM.md'),renderClaimMd({claim:row.claimId,...row.context,scope:row.scope,statement:row.statement},idx,row.cwd));
     }
+    async function roleGit(row,args){
+     if(!row.executor)return networkGit(row.cwd,args);
+     return new Promise((resolve,reject)=>{const child=spawn('docker',['exec',row.executor.containerName,'git',...args],{stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);const timer=setTimeout(()=>child.kill('SIGKILL'),120000);child.on('error',error=>{clearTimeout(timer);reject(error);});child.on('exit',code=>{clearTimeout(timer);code===0?resolve({stdout,stderr}):reject(Error('Isolated Git failed '+code+': '+stderr.slice(-900)));});});
+    }
     async function openSession(row,fresh){
      row.gateway=await groupGateway({graphId,url:SERVICE_URL,remotes:[{remote:row.remote,token:row.gitToken}],onRequest:e=>appendFileSync(join(dir,row.id+'-transport.jsonl'),JSON.stringify(e)+'\n')});
      const proxy=row.gateway.register(row.remote,row.gitToken);git(row.cwd,['remote','set-url','origin',proxy]);
@@ -115,11 +121,13 @@ export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld}={})
      }
      atomicWrite(join(row.cwd,'TASK.md'),actorPrompt(row,'Work remains in a provisional branch until the final phase. '+(native?'Push origin main; use bun '+CLI+' status to read notices. Do not call done until the final phase.':'Before the final phase push only your task branch. In the final phase fetch/rebase/test and push to origin main.')));
      if(scripted){
-      const thread='scripted-'+randomUUID();row.session={thread,model:null,state:{status:'ready'},async interrupt(){},async close(){},async turn(text,{label}={}){row.received.set(label,Date.now());note('scripted-presentation',{role:row.id,label,thread});if(label==='initial')atomicWrite(join(row.cwd,'.experiment/progress.json'),JSON.stringify({position:row.id==='export'?'independent':'provisional',premise:row.id==='export'?null:'P0'}));if(label==='final'){for(const path of row.scope){const ref=join(REPO,'scenarios/job-runner/reference',basename(path));if(existsSync(ref))cpSync(ref,join(row.cwd,path));}await commitAndPush(row,true);}return{status:'completed'};}};
+      if(rehearseExecutor){row.executor=await isolatedCodex({cwd:row.cwd,gateway:row.gateway,image:IMAGE});note('executor-qualified',{role:row.id,toolchain:row.executor.toolchain,model:row.executor.model,modelTurns:0});}
+      const thread='scripted-'+randomUUID();row.session={thread,model:null,state:{status:'ready'},async interrupt(){},async close(){await row.executor?.close();row.executor=null;},async turn(text,{label}={}){row.received.set(label,Date.now());note('scripted-presentation',{role:row.id,label,thread});if(label==='initial')atomicWrite(join(row.cwd,'.experiment/progress.json'),JSON.stringify({position:row.id==='export'?'independent':'provisional',premise:row.id==='export'?null:'P0'}));if(label==='final'){for(const path of row.scope){const ref=join(REPO,'scenarios/job-runner/reference',basename(path));if(existsSync(ref))cpSync(ref,join(row.cwd,path));}await commitAndPush(row,true);}return{status:'completed'};}};
      }else row.session=await startChallengeSession({cwd:row.cwd,gateway:row.gateway,image:IMAGE,stateDir:join(dir,'state',row.id,String(row.sessions.length+1)),role:row,budget:row.budget,onEvent:event=>{
       if(event.kind==='user-message-received'){const text=(event.item.content??[]).filter(c=>c.type==='text').map(c=>c.text).join('\n');for(const [label,prompt]of(row.pendingPrompts??new Map()))if(text===prompt&&!row.received.has(label)){row.received.set(label,event.at);note('presented',{role:row.id,label,thread:event.session});}}
       const ev=event.event;if(ev?.method==='item/completed'){const item=ev.params.item;if(['commandExecution','fileChange','mcpToolCall'].includes(item?.type)){row.completedTools++;row.lastProgressAt=Date.now();if(item.type==='commandExecution'&&item.exitCode!==0){row.failureCount++;note('command-failed',{role:row.id,code:item.exitCode,consecutive:row.failureCount});}else row.failureCount=0;}if(item?.type==='agentMessage')note('agent-message',{role:row.id,text:(item.text??'').slice(0,700)});}
      }});
+     if(!scripted)note('executor-qualified',{role:row.id,toolchain:row.session.state.toolchain,model:row.session.model});
      row.sessions.push({thread:row.session.thread,fresh,startedAt:Date.now()});note(fresh?'fresh-session':'session-ready',{role:row.id,thread:row.session.thread,model:row.session.model});
     }
     async function phaseTurn(row,text,label,{receipt=false,allowInterruption=false}={}){
@@ -134,9 +142,9 @@ export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld}={})
     }
     async function commitAndPush(row,script=false){
      const dirty=git(row.cwd,['status','--porcelain']).stdout.trim();
-     if(dirty){git(row.cwd,['add','-A','--',...row.scope.filter(p=>existsSync(join(row.cwd,p)))]);git(row.cwd,['-c','core.hooksPath=/dev/null','commit','-qm','Complete '+row.id+' work'+(native?'\n\nSuperpose-Claim: '+row.claimId:'')]);}
-     if(!native){await networkGit(row.cwd,['fetch','origin']);git(row.cwd,['rebase','origin/main']);}
-     await networkGit(row.cwd,['-c','core.hooksPath=/dev/null','push','-q','origin','HEAD:main']);
+     if(dirty){await roleGit(row,['add','-A','--',...row.scope.filter(p=>existsSync(join(row.cwd,p)))]);await roleGit(row,[...(!row.executor?['-c','core.hooksPath=/dev/null']:[]),'commit','-qm','Complete '+row.id+' work'+(native?'\n\nSuperpose-Claim: '+row.claimId:'')]);}
+     if(!native){await roleGit(row,['fetch','origin']);await roleGit(row,['rebase','origin/main']);}
+     await roleGit(row,[...(!row.executor?['-c','core.hooksPath=/dev/null']:[]),'push','-q','origin','HEAD:main']);
      if(native)must(await api.notePush(row.lease,row.claimId,git(row.cwd,['rev-parse','HEAD']).stdout.trim()),'record pushed head');
     }
     renewTimer=setInterval(async()=>{if(renewing)return;renewing=true;try{await Promise.all(rows.map(refresh));}catch(error){note('renewal-warning',{message:error.message});}finally{renewing=false;}},15000);
@@ -145,7 +153,8 @@ export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld}={})
     meta.phase='initial';
     await Promise.all(rows.map(row=>phaseTurn(row,'Read the inherited work. Record a brief provisional plan in .experiment/progress.json with position provisional/challenged/unresolved/independent and the premise it uses. Do a small amount of reversible work, commit any product changes in scope, then end this turn. More evidence and work will follow in this SAME conversation. Do not declare the entire task done yet.','initial')));
     coverage.inheritedDependencies=true;coverage.initialPositions=Object.fromEntries(rows.map(r=>[r.id,existsSync(join(r.cwd,'.experiment/progress.json'))?JSON.parse(readFileSync(join(r.cwd,'.experiment/progress.json'))):null]));
-    for(const row of rows)if(native){const head=git(row.cwd,['rev-parse','HEAD']).stdout.trim();await networkGit(row.cwd,['-c','core.hooksPath=/dev/null','push','-q','origin','HEAD:main']);must(await api.notePush(row.lease,row.claimId,head),'record inherited head');}
+    atomicWrite(join(dir,'initial-work.json'),JSON.stringify(rows.map(row=>({role:row.id,thread:row.session.thread,head:git(row.cwd,['rev-parse','HEAD']).stdout.trim(),position:coverage.initialPositions[row.id],files:Object.fromEntries(row.scope.filter(path=>existsSync(join(row.cwd,path))).map(path=>[path,readFileSync(join(row.cwd,path),'utf8')]))})),null,2));
+    for(const row of rows)if(native){const head=git(row.cwd,['rev-parse','HEAD']).stdout.trim();await roleGit(row,[...(!row.executor?['-c','core.hooksPath=/dev/null']:[]),'push','-q','origin','HEAD:main']);must(await api.notePush(row.lease,row.claimId,head),'record inherited head');}
     const affected=rows.filter(r=>r.id!=='export');
     if(native){const filed=must(await api.request('POST','/findings',{token:affected[0].lease,body:{finder:affected[0].claimId,statement:fixture.candidate.statement,effect:'contradicts',targets:[p0]}}),'file controlled candidate');finding=filed.finding.id;must(await api.request('POST','/findings/'+finding+'/publish',{token:env.SUPERPOSE_ADMIN_TOKEN,body:{lines:['work']}}),'publish candidate');const s=must(await api.snapshot(),'published snapshot');const recipients=s.events.filter(e=>e.type==='finding.shared'&&e.data.finding===finding).at(-1)?.claims??[];if(digest([...recipients].sort())!==digest(affected.map(r=>r.claimId).sort()))throw Error('Native candidate recipients differ from declared dependencies');coverage.nativeRecipients=recipients;}
     const candidateActionBaseline=affected[0].completedTools;
@@ -190,10 +199,13 @@ export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld}={})
       git(row.cwd,['branch','retired/P0-'+row.id,oldHead]);note('work-retired',{role:row.id,oldHead,oldThread,retainedCode:true});
       row.statement=row.id==='diagnosis'?'Resolve the exact incident from checked evidence while preserving correct accounting.':'Complete safe recovery under checked incident facts and the public budget/capacity promises.';
       row.context.task=row.statement;row.context.survivingAssumptions=[];row.context.acceptedCodeSha=oldHead;row.context.remainingWork='Resolve the task using the checked incident facts, preserving independently correct code and completing the public promises.';
-      if(native){must(await api.replan(row.lease,row.claimId,{restsOn:[],statement:row.statement}),'native successor');const s=must(await api.snapshot(),'successor snapshot');coverage[row.id+'Supersedes']=s.edges.filter(e=>e.source===row.claimId&&e.purpose==='supersedes');}
+      if(native){const before=must(await api.snapshot(),'current assumptions');const restsOn=before.edges.filter(e=>e.target===row.claimId&&e.purpose==='required for'&&!e.meta?.order&&e.source!==p0&&before.nodes.some(n=>n.id===e.source&&n.kind==='assumption')).map(e=>e.source);row.context.survivingAssumptions=restsOn.map(id=>{const n=before.nodes.find(n=>n.id===id);return{id,statement:n.statement,status:n.status};});must(await api.replan(row.lease,row.claimId,{restsOn,statement:row.statement}),'native successor');const s=must(await api.snapshot(),'successor snapshot');coverage[row.id+'Supersedes']=s.edges.filter(e=>e.source===row.claimId&&e.purpose==='supersedes');}
       if(arm!=='git-same'){
        await row.session.close();await row.gateway.close();
        if(native){must(await api.release(row.lease,row.claimId),'release old holder');const grant=must(await api.claim(env.SUPERPOSE_AGENT_KEY,row.claimId,'luna-'+row.id+'-fresh'),'fresh holder');row.lease=grant.token;row.gitToken=grant.git.token;const old=await api.renew(oldLease,row.claimId);if(old.ok)throw Error('Old lease still valid after fresh takeover');coverage[row.id+'OldLeaseRevoked']=true;}
+       const evidence=JSON.parse(readFileSync(join(row.cwd,'.experiment/evidence.json')));
+       const archived=retireLocalContext(row.cwd,join(dir,'retired',row.id),evidence);
+       coverage[row.id+'OldContextArchived']=archived;
        row.suspended=false;await openSession(row,true);if(row.session.thread===oldThread)throw Error('Fresh treatment reused its thread');coverage[row.id+'FreshThread']=row.session.thread;
       }else{row.gateway.authorize(row.remote,row.gitToken);row.suspended=false;}
      }else row.suspended=false;
@@ -238,4 +250,4 @@ async function isolatedAcceptance(checkout,fixture,dir){
  if(r.status!==0&&r.status!==1)throw Error('Independent evaluator failed: '+r.stderr.slice(-400));
  const result=JSON.parse(r.stdout);return{...result,processExitCode:r.status};
 }
-if(import.meta.main){const args=process.argv.slice(2),value=k=>args[args.indexOf(k)+1];if(!args.includes('--scripted')&&!args.includes('--live'))throw Error('Explicit --scripted or --live required');const result=await runChallenge({scripted:args.includes('--scripted'),outDir:args.includes('--out')?value('--out'):undefined,onlyArm:args.includes('--arm')?value('--arm'):undefined,onlyWorld:args.includes('--world')?value('--world'):undefined});console.log(JSON.stringify({finished:true,root:result.root,episodes:result.results.length}));if(result.results.some(r=>r.instrumentationFailure))process.exitCode=1;}
+if(import.meta.main){const args=process.argv.slice(2),value=k=>args[args.indexOf(k)+1];if(!args.includes('--scripted')&&!args.includes('--live'))throw Error('Explicit --scripted or --live required');const result=await runChallenge({scripted:args.includes('--scripted'),outDir:args.includes('--out')?value('--out'):undefined,onlyArm:args.includes('--arm')?value('--arm'):undefined,onlyWorld:args.includes('--world')?value('--world'):undefined,rehearseExecutor:args.includes('--rehearse-executor')});console.log(JSON.stringify({finished:true,root:result.root,episodes:result.results.length}));if(result.results.some(r=>r.instrumentationFailure))process.exitCode=1;}
