@@ -198,6 +198,7 @@ export async function runChallenge({outDir,scripted=false,onlyArm,onlyWorld}={})
       }else{row.gateway.authorize(row.remote,row.gitToken);row.suspended=false;}
      }else row.suspended=false;
     }
+    for(const row of rows)atomicWrite(join(row.cwd,'TASK.md'),actorPrompt(row,'Use the current task board and checked facts; retire unsupported premises while preserving independently justified code.'));
     coverage.independentSessionRetained=rows.find(r=>r.id==='export').sessions.length===1;coverage.noFreshInA=world!=='A'||rows.every(r=>r.sessions.length===1);
     // Both fresh treatments receive this fixed projection, never old transcript
     // text or a reference repair. Same-conversation retains its provider history.
