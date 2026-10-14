@@ -39,8 +39,8 @@ export async function isolatedCodex({cwd,gateway,image,onEvent=()=>{}}) {
   const args=['run','--rm','-i','--pull','never','--name',name,'--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
     '--pids-limit','128','--memory','1g','--cpus','1','--tmpfs','/tmp:rw,nosuid,nodev,size=128m','--tmpfs','/root:rw,nosuid,nodev,size=32m',
     '--mount',`type=bind,src=${resolve(cwd)},dst=${resolve(cwd)}`,'--mount',`type=bind,src=${tools},dst=${sourceDir},readonly`,
-    '--mount',`type=bind,src=${bin},dst=/opt/codex,readonly`,'--mount',`type=bind,src=${bun},dst=/opt/tools/bun,readonly`,
-    '--mount',`type=bind,src=${rg},dst=/opt/tools/rg,readonly`,
+    '--mount',`type=bind,src=${bin},dst=/opt/codex,readonly`,'--mount',`type=bind,src=${bun},dst=/opt/tools/bun,readonly`,'--mount',`type=bind,src=${bun},dst=/usr/local/bin/bun,readonly`,
+    '--mount',`type=bind,src=${rg},dst=/opt/tools/rg,readonly`,'--mount',`type=bind,src=${rg},dst=/usr/local/bin/rg,readonly`,
     '--mount',`type=bind,src=${gateway.root},dst=/opt/experiment-gateway,readonly`,
     '--env','PATH=/opt/tools:/usr/local/bin:/usr/bin:/bin','--workdir',resolve(cwd),'--entrypoint','/bin/sh',image,
     '-c',`mkdir -p /root/.bun/bin; ln -sf /opt/tools/bun /root/.bun/bin/bun; node '${sourceDir}/gateway-client.mjs' '${gateway.port}' & exec /opt/codex exec-server --listen stdio:// --linux-sandbox-pid-namespace inherit`];
@@ -54,13 +54,18 @@ export async function isolatedCodex({cwd,gateway,image,onEvent=()=>{}}) {
     await rpc.rpc('environment/add',{environmentId,execServerUrl:`ws://127.0.0.1:${server.port}`,connectTimeoutMs:15000});
     const info=await rpc.rpc('environment/info',{environmentId});
     if(!info.cwd?.includes(resolve(cwd))) throw new Error('The executor reported a different checkout');
+    // Codex invokes tools through a login shell, whose profile can replace PATH.
+    // Check that exact shell before any model turn, including the mounted CLI.
+    const toolCheck=spawnSync('docker',['exec',name,'/bin/bash','-lc',
+      `set -eu; bun --version; rg --version | head -1; /root/.bun/bin/bun --version; bun '${sourceDir}/superpose.mjs' --help >/dev/null; test ! -r '/root/workspace/superpose/.env'; test ! -r '/root/.codex/auth.json'`],{encoding:'utf8',timeout:15000});
+    if(toolCheck.status!==0) throw new Error('Isolated login-shell preflight failed: '+(toolCheck.stderr??'').slice(-600));
     const started=await rpc.rpc('thread/start',{model:'gpt-6-luna',allowProviderModelFallback:false,ephemeral:true,approvalPolicy:'never',
       sandbox:'danger-full-access',cwd:resolve(cwd),environments:[{environmentId,cwd:resolve(cwd),runtimeWorkspaceRoots:[resolve(cwd)]}],
       serviceTier:'default',config:{model_reasoning_effort:'medium',memories:{use_memories:false,generate_memories:false}},serviceName:'superpose-challenge'});
     if(started.model!=='gpt-6-luna'||started.reasoningEffort!=='medium') throw new Error('Model or effort mismatch');
     if(started.serviceTier!=='default' && started.serviceTier!=='standard') throw new Error('The experiment requires the standard service tier');
     if(started.instructionSources.some(p=>!p.startsWith(resolve(cwd)+'/'))) throw new Error('Instructions outside the task checkout were loaded');
-    return {rpc,thread:started.thread.id,sessionId:started.thread.id,model:started.model,serviceTier:started.serviceTier,reasoningEffort:started.reasoningEffort,containerName:name,environmentId,close,
+    return {rpc,thread:started.thread.id,sessionId:started.thread.id,model:started.model,serviceTier:started.serviceTier,reasoningEffort:started.reasoningEffort,toolchain:toolCheck.stdout.trim(),containerName:name,environmentId,close,
       async turn(prompt){return rpc.rpc('turn/start',{threadId:started.thread.id,model:'gpt-6-luna',effort:'medium',serviceTierForTurn:'default',input:[{type:'text',text:prompt}]});},
       async interrupt(turnId){if(typeof turnId!=='string'||!turnId) throw new Error('A turnId is required to interrupt the active turn');return rpc.rpc('turn/interrupt',{threadId:started.thread.id,turnId},5000);}};
   } catch(error){await close();throw new Error(`${error.message}${executorErrors ? ' (executor startup failed)' : ''}`);}
