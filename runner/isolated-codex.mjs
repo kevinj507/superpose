@@ -23,7 +23,7 @@ export class CodexRpc {
   close(){this.child.kill('SIGTERM');}
 }
 
-export async function isolatedCodex({cwd,gateway,image,onEvent=()=>{}}) {
+export async function isolatedCodex({cwd,gateway,image,onEvent=()=>{},runtimeDir,notesDir}) {
   const root=mkdtempSync('/tmp/superpose-session-');const tools=join(root,'tools');mkdirSync(tools);
   for(const file of ['superpose.mjs','lib.mjs']) cpSync(join(sourceDir,file),join(tools,file));
   cpSync(join(sourceDir,'experiment-gateway-client.mjs'),join(tools,'gateway-client.mjs'));
@@ -44,6 +44,14 @@ export async function isolatedCodex({cwd,gateway,image,onEvent=()=>{}}) {
     '--mount',`type=bind,src=${gateway.root},dst=/opt/experiment-gateway,readonly`,
     '--env','PATH=/opt/tools:/usr/local/bin:/usr/bin:/bin','--workdir',resolve(cwd),'--entrypoint','/bin/sh',image,
     '-c',`mkdir -p /root/.bun/bin; ln -sf /opt/tools/bun /root/.bun/bin/bun; node '${sourceDir}/gateway-client.mjs' '${gateway.port}' & exec /opt/codex exec-server --listen stdio:// --linux-sandbox-pid-namespace inherit`];
+  // Optional project resources are explicit per-group mounts, never a parent
+  // workspace. Runtime is read-only; only the notes treatment shares a writer.
+  for (const [directory,target,readonly] of [[runtimeDir,'/opt/job-service',true],[notesDir,'/opt/team-notes',false]]) {
+    if (!directory) continue;
+    const path=resolve(directory);
+    if (!existsSync(path)||path.includes(',')) throw new Error('Invalid isolated project resource');
+    args.splice(args.indexOf('--env'),0,'--mount',`type=bind,src=${path},dst=${target}${readonly?',readonly':''}`);
+  }
   const executor=spawn('docker',args,{stdio:['pipe','pipe','pipe']});
   let executorErrors='';executor.stderr.on('data',b=>{executorErrors=(executorErrors+b.toString()).slice(-2000);});
   createInterface({input:executor.stdout}).on('line',line=>socket?.send(line));
