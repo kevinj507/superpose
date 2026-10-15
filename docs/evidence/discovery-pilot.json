@@ -1,0 +1,174 @@
+{
+  "kind": "recorded-model-pilot-summary",
+  "sourceResultsSha256": "7ff1c14fcbc124b117fca8ac3ba3fd0eca069e37521a8c30a83b287a03ef0d73",
+  "completedAt": 1792033772916,
+  "cancelled": false,
+  "model": "gpt-6-luna",
+  "effort": "medium",
+  "sourceCommit": "9dffc73163b6cdadc1ee74082d3bdaff66e24615",
+  "limits": "One workload per group. Configured usage estimates exclude Cloudflare and are not billing. Later fixes do not revise these delivered results.",
+  "groups": [
+    {
+      "arm": "codex",
+      "graphId": "discovery-20261015t030311-g1",
+      "elapsedMs": 45546,
+      "sharedSha": "3f3466282c49a6361170e962086276e3dcab2fbe",
+      "checks": [
+        {
+          "name": "initial-affordable-completion",
+          "pass": true
+        },
+        {
+          "name": "initial-budget-stops",
+          "pass": true
+        },
+        {
+          "name": "rolled-affordable-completion",
+          "pass": true
+        },
+        {
+          "name": "rolled-budget-stops",
+          "pass": true
+        },
+        {
+          "name": "effects-execute-once",
+          "pass": true
+        },
+        {
+          "name": "bounded-pending",
+          "pass": true
+        },
+        {
+          "name": "budget-prevents-effects",
+          "pass": true
+        },
+        {
+          "name": "exact-csv",
+          "pass": true
+        },
+        {
+          "name": "receipt-feature",
+          "pass": true
+        },
+        {
+          "name": "queue-feature-current-service",
+          "pass": true
+        },
+        {
+          "name": "csv-report-feature",
+          "pass": true
+        }
+      ],
+      "actions": 26,
+      "estimatedCostUsd": 0.05437825
+    },
+    {
+      "arm": "notes",
+      "graphId": "discovery-20261015t030311-g2",
+      "elapsedMs": 41639,
+      "sharedSha": "73a3b1ca28c16a3a989e0285df376537c13da100",
+      "checks": [
+        {
+          "name": "initial-affordable-completion",
+          "pass": true
+        },
+        {
+          "name": "initial-budget-stops",
+          "pass": true
+        },
+        {
+          "name": "rolled-affordable-completion",
+          "pass": true
+        },
+        {
+          "name": "rolled-budget-stops",
+          "pass": true
+        },
+        {
+          "name": "effects-execute-once",
+          "pass": true
+        },
+        {
+          "name": "bounded-pending",
+          "pass": true
+        },
+        {
+          "name": "budget-prevents-effects",
+          "pass": true
+        },
+        {
+          "name": "exact-csv",
+          "pass": true
+        },
+        {
+          "name": "receipt-feature",
+          "pass": true
+        },
+        {
+          "name": "queue-feature-current-service",
+          "pass": true
+        },
+        {
+          "name": "csv-report-feature",
+          "pass": true
+        }
+      ],
+      "actions": 37,
+      "estimatedCostUsd": 0.045980375000000004
+    },
+    {
+      "arm": "superpose",
+      "graphId": "discovery-20261015t030311-g3",
+      "elapsedMs": 157329,
+      "sharedSha": "d148648a1c73d18a8beed6a610f473d4fd8ab4a4",
+      "checks": [
+        {
+          "name": "initial-affordable-completion",
+          "pass": true
+        },
+        {
+          "name": "initial-budget-stops",
+          "pass": true
+        },
+        {
+          "name": "rolled-affordable-completion",
+          "pass": false
+        },
+        {
+          "name": "rolled-budget-stops",
+          "pass": false
+        },
+        {
+          "name": "effects-execute-once",
+          "pass": false
+        },
+        {
+          "name": "bounded-pending",
+          "pass": true
+        },
+        {
+          "name": "budget-prevents-effects",
+          "pass": true
+        },
+        {
+          "name": "exact-csv",
+          "pass": false
+        },
+        {
+          "name": "receipt-feature",
+          "pass": true
+        },
+        {
+          "name": "queue-feature-current-service",
+          "pass": false
+        },
+        {
+          "name": "csv-report-feature",
+          "pass": false
+        }
+      ],
+      "actions": 49,
+      "estimatedCostUsd": 0.11119175
+    }
+  ]
+}

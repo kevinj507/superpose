@@ -9,19 +9,20 @@ const HEDGE = 300_000;
 function setup() {
   const clock = { t: 1_000_000, now() { return this.t; } };
   let n = 0;
-  const engine = new Engine(new MemoryStore(), clock, {
+  const store = new MemoryStore();
+  const engine = new Engine(store, clock, {
     leaseMs: LEASE,
     hedgeMs: HEDGE,
     newToken: () => `tok${++n}`,
   });
-  return { engine, clock };
+  return { engine, clock, store };
 }
 
 // 100 claims. Assumption A carries 12 of them: 9 directly (d1..d9) and 3
 // that build on d1..d3 (i1..i3). Assumption B carries the other 88 (o1..o88).
 // d1..d3 are finished so i1..i3 can start; everything else is in progress.
 function hundredClaims() {
-  const { engine, clock } = setup();
+  const { engine, clock, store } = setup();
   const A = engine.addAssumption('the date library handles time zones');
   const B = engine.addAssumption('requests are authenticated upstream');
   const tokens = new Map<string, string>();
@@ -41,7 +42,7 @@ function hundredClaims() {
   const twelve = [...direct, ...indirect].map((c) => c.id);
   const eightyEight = others.map((c) => c.id);
   const finder = others[49]!.id;
-  return { engine, clock, A, B, tokens, twelve, eightyEight, finder, direct, indirect };
+  return { engine, clock, store, A, B, tokens, twelve, eightyEight, finder, direct, indirect };
 }
 
 describe('scoping', () => {
@@ -184,6 +185,22 @@ describe('delivery at lease renewal', () => {
 });
 
 describe('teeth', () => {
+  it('a live holder can stop relying on an uncertain premise without verifying it for everyone', () => {
+    const w = hundredClaims(), id = w.direct[6]!.id, token = w.tokens.get(id)!;
+    const replacement = w.engine.addAssumption('Use the current admission evidence');
+    const finding = w.engine.fileFinding(id, token, {statement:'The old contract may have changed',effect:'contradicts',targets:[w.A.id]}).finding;
+    const before = w.engine.getClaim(id);
+    w.engine.replan(id, token, {restsOn:[replacement.id]});
+    expect(w.engine.getClaim(id)).toMatchObject({status:'claimed',version:before.version+1,scope:before.scope,statement:before.statement});
+    expect(w.engine.node(finding.id)).toMatchObject({status:'unverified'});
+    expect(w.engine.node(w.A.id)).toMatchObject({status:'holding'});
+    expect(w.engine.getClaim(w.direct[5]!.id).status).toBe('claimed');
+    expect(w.store.edgesTo(id,'required for').map(e=>e.source)).toContain(replacement.id);
+    expect(w.store.edgesTo(id,'required for').map(e=>e.source)).not.toContain(w.A.id);
+    expect(w.store.edgesFrom(id,'supersedes')).toHaveLength(1);
+    expect(()=>w.engine.replan(id,token,{restsOn:[],scope:['**']})).toThrow(/scope remain frozen/);
+  });
+
   it('a stale claim cannot push, and its lease is not extended until it re-plans', () => {
     const w = hundredClaims();
     const C = w.engine.addAssumption('timestamps are stored in UTC and converted at the edge');

@@ -77,6 +77,15 @@ export async function runDiscovery(root,qualificationFile,recoveryFile){
    await Promise.all(rows.map(row=>turn(row,taskPrompt(row,arm),'ordinary-task')));if(cancelled)throw Error('Infrastructure or deadline stop');
    // The only follow-up allowed is an actual queued product notification to a still-held claim.
    if(native){while(observing)await sleep(30);await observe();const s=must(await api.snapshot(),'idle notification eligibility');await Promise.all(rows.filter(row=>row.pendingNotices.length&&s.nodes.find(n=>n.id===row.claimId)?.lease&&!row.budget.check()).map(async row=>{const notices=row.pendingNotices.splice(0);log('native-notice-presented',{arm,role:row.id,types:notices.map(n=>n.type),delivery:'idle-holder'});await turn(row,notices.map(n=>n.title+'\n'+n.text).join('\n\n'),'product-notice');}));}
+   // A completed model turn may leave an asynchronous CLI process running.
+   // Observe those already-started commands within the same role time budget
+   // before scoring delivery; never issue another task to finish it for them.
+   while(rows.some(r=>r.session.state.activeCommands>0)&&!cancelled){
+    for(const row of rows.filter(r=>r.session.state.activeCommands>0)){
+     if(row.budget.check()){log('pending-command-cutoff',{arm,role:row.id,count:row.session.state.activeCommands,reason:row.budget.check()});await row.session.close();row.session.state.activeCommands=0;}
+    }
+    if(rows.some(r=>r.session.state.activeCommands>0))await sleep(500);
+   }
    clearInterval(observer);while(observing)await sleep(30);
    if(native)await waitFor(api,'landing settlement',s=>!pendingLanding(s),90000);
    let final=shared;if(native){final=join(dir,'final');await gitAsync(dir,['clone','-q',origin.remoteUrl,final],{env:gitAuthEnv(origin.auth.token)});atomicWrite(join(dir,'final-snapshot.json'),JSON.stringify(must(await api.snapshot(),'final snapshot'),null,2));}

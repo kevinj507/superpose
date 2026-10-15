@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // No coding turns. Qualify actual uncertain publication and isolated presentation.
-import{mkdirSync,writeFileSync}from'node:fs';import{join,resolve}from'node:path';
+import{mkdirSync,writeFileSync,appendFileSync}from'node:fs';import{join,resolve}from'node:path';
+import{git,gitAsync}from'./lib.mjs';
 import{prepareDiscoveryFixture,ROLES,ARTICLE,LEGACY_CONTRACT}from'./discovery-fixture.mjs';
 import{writeRuntime}from'./runtime-fixture.mjs';import{prepareHostedOrigin}from'./hosted-origin.mjs';import{isolatedCodex}from'./isolated-codex.mjs';
 import{credentials,must,initSeed,provisionNative,command,CLI,IMAGE,apiFor,collectNotices}from'./runtime-support.mjs';
@@ -34,6 +35,31 @@ export async function qualifyDiscovery(root){
   check('prose promise has no executable checker',!article.check&&!snapshot.nodes.some(n=>n.kind==='finding'&&n.finder==='gate'));
   must(await api.refute(c.admin,candidate.id),'refute qualification candidate');
   const refuted=must(await api.snapshot(),'refuted snapshot');check('refutation keeps existing holders and branches',rows.every(r=>{const before=snapshot.nodes.find(n=>n.id===r.claimId),after=refuted.nodes.find(n=>n.id===r.claimId);return after?.status==='claimed'&&JSON.stringify(after.lease)===JSON.stringify(before.lease)&&after.headSha===before.headSha;}));
+  // Exercise the complete prose-only lifecycle, including the two gaps found
+  // by the real agents: revising a live assumption and completing without a
+  // nonexistent executable-constitution job.
+  const revised=await command('docker',['exec',rows[0].executor.containerName,'bun',CLI,'replan','--rests-on','none']);
+  check('a live holder can revise its own premise without verification',revised.code===0);
+  for(const row of rows){
+   const file=row.id==='worker'?'src/worker.mjs':row.id==='retry'?'src/retry.mjs':'src/export.mjs';
+   appendFileSync(join(row.cwd,file),'\n// Scripted qualification: this scoped module was reviewed.\n');
+   git(row.cwd,['add',file]);git(row.cwd,['-c','core.hooksPath=/dev/null','commit','-qm','Record scoped qualification review\n\nSuperpose-Claim: '+row.claimId]);
+   await gitAsync(row.cwd,['push','-q','origin','HEAD:main']);
+  }
+  await Promise.all(rows.map(async row=>{
+   const began=Date.now();let completed=false;
+   for(let i=0;i<3;i++){
+    const r=await command('docker',['exec',row.executor.containerName,'bun',CLI,'done','--wait','60'],{timeoutMs:90000});
+    appendFileSync(join(root,row.id+'-completion.txt'),r.stdout+r.stderr);
+    if(r.code===0){completed=true;break;}
+    if(!r.stdout.concat(r.stderr).includes('Superpose told this claim things you have not read yet'))break;
+   }
+   check(row.id+' ordinary completion skips absent executable checks',completed&&Date.now()-began<90000);
+  }));
+  let landed;const end=Date.now()+180000;
+  while(Date.now()<end){landed=must(await api.snapshot(),'landing');if(rows.every(r=>landed.nodes.find(n=>n.id===r.claimId)?.status==='landed'))break;await new Promise(r=>setTimeout(r,2000));}
+  writeFileSync(join(root,'landed-snapshot.json'),JSON.stringify(landed,null,2));
+  check('all three prose-only claims land through their normal CLI',rows.every(r=>landed.nodes.find(n=>n.id===r.claimId)?.status==='landed'));
   result.pass=true;return result;
  }catch(error){result.pass=false;result.error=error.message;throw error;}
  finally{for(const row of rows){await row.executor?.close();await row.gateway?.close();if(row.lease)await api.release(row.lease,row.claimId).catch(()=>{});}result.finishedAt=Date.now();save();}

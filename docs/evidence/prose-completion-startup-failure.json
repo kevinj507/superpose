@@ -1,0 +1,23 @@
+{
+  "graphId": "discovery-qual-mv8zpp85",
+  "url": "https://superpose-judge-check.kevinj507.workers.dev",
+  "modelCalls": 0,
+  "startedAt": 1792035577589,
+  "checks": [
+    {
+      "name": "candidate remains unverified",
+      "pass": true
+    },
+    {
+      "name": "candidate stays local before owner publication",
+      "pass": true
+    },
+    {
+      "name": "publication preserves uncertainty",
+      "pass": true
+    }
+  ],
+  "pass": false,
+  "error": "Codex session server exited",
+  "finishedAt": 1792035607732
+}

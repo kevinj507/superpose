@@ -1,44 +1,36 @@
-# Recording the demo
+# Current Superpose walkthrough
 
-A runbook for the 5–10 minute video. Every scene below has been run live with real agents (graph `world-rehearsal-0212`). That run made its admin decisions (verify, serve) through the API; the canvas buttons for them came later and make the same calls.
+Start with the [root README](../README.md) for the product, architecture, commands and measured results. Kevin handles the video. This guide identifies behavior and evidence that can be shown without inventing an experimental outcome.
 
-## Before you record
+## Run the reproducible demonstration
 
-- Use a 1920×1080 screen with the browser full-screen; press `E` on the canvas to hide the event panel if the cards get small.
-- Use agents that can run 3–5 at once. This development box sustains 2. Use a second machine with Claude Code logged in, running another `run.mjs` against the same graph; taking a claim is atomic.
-- Keep secrets off screen. Paste the admin token into the canvas off camera, and never show `.env` or a terminal with tokens. No GitHub logos.
-- Plan a fresh graph (about 10 s):
+After [setup](setup.md), run `bun run smoke` and `bun run demo`. The demo prints its own canvas URL and writes `.superpose/runs/<graph-id>/result.json`. Every run gets a fresh graph. It uses scripted clients with zero model calls; actual repositories, events, checks and integration run on Cloudflare.
 
-```sh
-node runner/plan.mjs scenarios/world --graph demo --env <file>
-```
+The [fresh production run](https://superpose.kevinj507.workers.dev/g/demo-mv8zz0i6-32e70f) passed all 11 checks in 159 seconds after deploying the qualified fixes. Its [receipt](evidence/production-recovery.json) records the exact commits.
 
-## Scenes
+The earlier retained [recovery run](https://superpose-judge-check.kevinj507.workers.dev/g/demo-mv8y1t5b-c23fc9) passed in about 145 seconds. Its sequence was:
 
-1. **The screen that makes many agents legible (0:00–1:00).** Open `https://superpose.kevinj507.workers.dev/g/demo`. Start agents on screen:
+| Approximate elapsed time | What to inspect |
+|---|---|
+| Start | Worker, retry and CSV each hold scoped claims with separate Artifacts repositories. Inspect a claim's statement, scope, assumptions and commit ledger. |
+| +38 s | A service update breaks an adopted constitution article. The platform files the finding and identifies affected worker/retry claims. CSV is excluded. |
+| +58 s | CSV's own checks pass. Its combined result waits because the same article already fails on the shared line alone; CSV is not blamed. |
+| +87 s | The scripted worker has replanned, repaired and completed through the normal CLI. |
+| +120 s | The same CSV commit is rechecked after repair and its waiting CLI completes. |
+| +142–145 s | Worker and CSV are landed; all 11 integrated product checks pass. The idle retry holder is released. |
 
-   ```sh
-   node runner/run.mjs --graph demo --agents 3 --model sonnet --renew-every 10 --env <file>
-   ```
+These timings describe the retained run, not guaranteed timings for a fresh deployment. A cold container can take longer. The unchanged CSV commit was `67b5253eda67931038c1bc01cbe308b8429fac11`; the worker repair was `d350cd9e22cc2c6150e0f762c044d30cc8a3f9bd`. The demo is a job-service fixture, not the earlier visual world application.
 
-   Claims turn orange as agents take them, lease countdowns tick, and verdicts appear as pushes are checked in containers.
-2. **A claim instead of a pull request.** Click a claim. The inspector shows its statement, scope, the assumptions it rests on, its repo, and the ledger: each commit, the files it changed, and the verdict on that exact SHA. Point out that its pushes were plain git.
-3. **Landing.** Watch a claim go done, then landed, and a claim that builds on it become ready. Its fork already contains the work. Open `/served/demo/` and the world fills in module by module.
-4. **The finding.** On line `main`, the agent building stable world links discovers that the shared random stream couples modules, and files a finding with evidence. In the rehearsal it came about 15 minutes in. To force it at a chosen moment, file it yourself from that agent's working copy with `node runner/superpose.mjs finding --contradicts a1 "<text>"`.
-   - Click the finding. It is dashed, a hedge that stops nobody. As admin, choose **Verify**: the inline step shows the cost first, which claims would stop and which reality is safe.
-   - Confirm. The pulse runs down from the assumption, and only the claims resting on it turn stale. Cards say "learns at renewal", then "agent told".
-   - In the terminal, that agent prints `STALE` and re-plans; everyone else keeps going.
-5. **The numbers.** Cut to `sim/report-2026-10-12.json`, or say: with 97 live agents, every affected agent heard within one renewal interval (at most 14 s), none of the other 88 was told to stop, and Superpose accepted no push from a stale claim.
-6. **Realities.** The strip at the top shows the decision, "How do modules get their randomness?", with both options built. As admin, choose **Serve this reality** on `own-streams`. Reload `/served/demo/`: the world for the same seed is now built with a stream per module. The old reality is still there.
-7. **How it is built (8:00–9:00).** One sentence per product, using the table in the README: Workers, Durable Objects, Artifacts, Artifacts events to Workflows, and Containers.
-8. **Ease of use.** Two commands, `plan.mjs` and `run.mjs`. Pushing needs nothing but git, and anyone can watch at the hosted URL.
+## Show real-agent evidence separately
 
-## A run with no machine at all
+The [runtime pilot](https://superpose.kevinj507.workers.dev/g/runtime-20261015t003452-g3) shows automatic current-service detection, affected-holder receipt and actual model repair. Its delivered result stays **8/11, 8/11, 10/11**. CSV did not land. The later scripted recovery demonstrates a fix, not a revised pilot score.
 
-The landing page's **Watch agents build one now** button (`POST /api/play`) starts the same story on Cloudflare, with scripted agents in a container and a director playing the human. It takes about 3 to 5 minutes from start to the reality switch. Its scripted agents' commits are placeholders, so `/served/` shows no world there: use it as a fallback for the canvas in scenes 1, 2, 4 and 6, or to show that the whole thing runs on Cloudflare.
+The [discovery pilot](https://superpose-judge-check.kevinj507.workers.dev/g/discovery-20261015t030311-g3) shows two findings authored by actual coding agents and shared by the owner's scripted policy while still unverified. Retry acknowledged the first warning. No claim became stale and CSV received no contradiction. Its delivered result stays **11/11, 11/11, 5/11** because completion failed. Native commits passing their own checks and model messages claiming completion did not mean they landed.
 
-## If something goes wrong on camera
+The post-run completion qualification is a separate scripted check. Use the [experiment reports](experiments/) for the exact conditions, limitations and fixes. Do not file a finding on camera and describe it as spontaneous discovery. If a fresh run fails, keep its receipt and use the retained run with its date and scripted/model label.
 
-- **The finding does not come by itself:** file it from the agent's copy as in scene 4.
-- **A landing sticks** (the line shows a landing for minutes): as admin, choose **Give up on this landing** on the line. It is retried at once.
-- **Fallback footage:** `world-rehearsal-0212` holds a complete run: both lines fully landed and `own-streams` served, with the finding, the stale notice and the re-plan in its event panel. Screenshots taken during that run are kept outside the repo.
+## Explain the platform
+
+Workers serve the API and canvas. Each project's graph and evidence live in a SQLite Durable Object. Artifacts provides real Git repositories and scoped tokens; push events start Workflows. Containers run checks and integration. The constitution tests the combined product, while a claim's own checks test its own work. Findings connect evidence to the claims that depend on it; sharing a suspicion does not verify it.
+
+The [older world storyboard](earlier-world-video.md) and [earlier README](earlier-world-demo.md) are historical. The landing page's older scripted playground uses placeholder edits; it is not the current job-service recovery demonstration and is not evidence of model discovery.

@@ -10,21 +10,26 @@ The existing Superpose knowledge graph is the work record: https://graphtask.waf
 
 ## Progress
 
+Current continuation: session #9397, after full handoff #9396. Kevin owns the video. The completed pilot remains 11/11, 11/11, 5/11. Its separate no-model qualification passed 20/20 checks and all three actual landings. The root README, supporting docs and public evidence receipts now provide a single judge/agent entry point. Portable wrapper/cleanup qualification passed; full local verification passed 272 tests and typecheck. Production was updated to ff4a4f2a-3b0a-42d3-9b5a-1d88806f70c4; fresh production recovery passed all 11 checks in 159 seconds. Source review found no known credentials or token-pattern matches across the reviewed source and reachable history; final copy/link changes are being checked. Source access/publication and Kevin's manual entry remain outstanding.
+
 - [x] 2026-10-15 02:19 UTC: audited the repository README, deployment config, runtime experiment launcher and qualification script; verified official deadline and required deliverables.
 - [x] 2026-10-15: retrieved the existing graph and full export; reread the submission/scoring records, build notes, accepted findings framework, earlier recovery experiment, latest runtime experiment, and relevant research.
 - [x] 2026-10-15 02:24 UTC: reconciled the existing submission, project hub, build notes and latest result; created session #9389 and tasks #9390–#9395, verified their dependency/evidence edges, and saved a fresh full graph export.
 - [x] 02:47 UTC: portable setup and smoke passed from a clean checkout on separate Cloudflare resources; two concurrent submissions checked and landed in67s.
 - [x] 02:56 UTC: corrected CSV own-check configuration and baseline attribution; real Cloudflare demo retained and normally completed the unchanged CSV commit after repair,11/11 integrated checks,145s.
 - [x] Portable bun run demo implemented and passed with no model login or host-specific executor. Real-agent quickstart remains part of documentation.
-- [ ] Prepare the final explanation, refreshed README and agent instructions, video script, recording, and submission fields.
+- [x] About 03:10 UTC: completed the approved uncertain-discovery pilot. Controls passed 11/11; Superpose delivered 5/11 because its three checked submissions did not finish landing. Two agent-originated findings were shared while unverified; affected receipt was observed. Preserve the result and its limitations.
+- [x] Implemented narrow live-assumption revision, prose-only completion and pending-command settlement fixes; 42 focused tests and typecheck passed. Deployed test version 9565012c-b3ae-42aa-a0f8-5cae0934e0b6.
+- [x] Separate prose lifecycle qualification: 20/20 checks, three normal CLI completions and actual landings in 119.275 s. The first sandbox executor-startup failure is retained. No model rerun.
+- [x] Central judge/agent README, setup/agent guidance, current demo walkthrough, public receipts and copy-ready submission fields prepared. Kevin owns video production.
 - [ ] Check repository access, license, video, hosted URLs, and human submission receipt.
-- [ ] Optional after setup is qualified and time permits: ordinary CI-alert comparison and spontaneous unverified-finding experiment. Neither has been started or treated as a prerequisite for submission.
+- [ ] Optional/deferred: ordinary CI-alert comparison. The spontaneous unverified-finding experiment has finished; neither experiment is a submission prerequisite.
 
 ## Surprises & Discoveries
 
-The latest experiment already used the actual deployed Worker, Artifacts repositories, Workflows and Cloudflare check containers. Local Docker containers isolated coding-agent execution and private evaluation; they did not emulate Superpose's backend. Control groups had Artifacts-backed origins but were evaluated on their local shared edits whether or not they pushed. Preserve that distinction rather than prescribing Git coordination to the vanilla control.
+The runtime-change experiment already used the actual deployed Worker, Artifacts repositories, Workflows and Cloudflare check containers. Local Docker containers isolated coding-agent execution and private evaluation; they did not emulate Superpose's backend. Control groups had Artifacts-backed origins but were evaluated on their local shared edits whether or not they pushed. Preserve that distinction rather than prescribing Git coordination to the vanilla control.
 
-Portability is incomplete. `runner/runtime-support.mjs` reads this checkout's `.env`, defaults to Kevin's hosted service, and pins a locally available Docker image digest. `runner/qualify-runtime-inputs.mjs` invokes the local isolated executor even without model calls. These research scripts cannot be the judge's only quickstart. `README.md` and `docs/demo.md` emphasize an older world scenario; some scripted commits are explicitly placeholders. The current package has no unified setup/demo command.
+The initial audit found portability incomplete: the research scripts depended on local credentials and Docker, and the old README/demo emphasized a placeholder world scenario. Portable setup/smoke/demo commands now pass on a separate Cloudflare installation and README has been rewritten in the working tree. Research launchers still have additional host dependencies and must remain separate from the judge quickstart. The old storyboard is now explicitly historical in `docs/earlier-world-video.md`; `docs/demo.md` describes the current qualified demo.
 
 The graph already has submission task #9184, superseding #9202, and scoring guidance #9203. The October 13 target is obsolete. Earlier #9362 explicitly deferred the throughput changes proposed at the end of design #9353; do not present batching or a one-container landing path as shipped.
 
@@ -40,7 +45,7 @@ Execution choice: use a deterministic scripted demo to establish that the real p
 
 ## Outcomes & Retrospective
 
-Portable setup, smoke, and recovery demo now pass on a separate Cloudflare installation. Original experiment results remain unchanged. The approved unverified-finding pilot is being qualified; no new coding turns have started. Publication, video, final instructions and entry remain outstanding.
+Portable setup, smoke, and recovery demo pass on a separate Cloudflare installation. Original experiment results remain unchanged. The approved unverified-finding pilot finished: controls 11/11, native 5/11 delivered, with spontaneous uncertain findings and targeted receipt but completion bugs. Its post-run product fixes passed the separate full no-model lifecycle qualification (20/20). Pending provider-command settlement has unit coverage; no model experiment was rerun. Publication, final instructions and entry remain outstanding. Kevin handles video.
 
 ## Context and Orientation
 
@@ -99,7 +104,7 @@ Current live service: https://superpose.kevinj507.workers.dev
 
 Real runtime pilot: https://superpose.kevinj507.workers.dev/g/runtime-20261015t003452-g3
 
-The latest pilot passed 8/11 checks for vanilla, 8/11 for optional notes, and 10/11 for Superpose. Superpose detected, routed and repaired the runtime failure; its CSV extension was stranded. A separate diagnostic passed 11/11 after merging the unchanged CSV commit, but is not a delivered experiment result. This evidence does not isolate graph routing from ordinary CI alerts.
+The earlier runtime pilot passed 8/11 checks for vanilla, 8/11 for optional notes, and 10/11 for Superpose. Superpose detected, routed and repaired the runtime failure; its CSV extension was stranded. A separate diagnostic passed 11/11 after merging the unchanged CSV commit, but is not a delivered experiment result. This evidence does not isolate graph routing from ordinary CI alerts.
 
 ## Interfaces and Dependencies
 

@@ -492,6 +492,16 @@ export function findingMayReach(index, finding, claimId) {
     (origin.sharing === 'isolated' && target.sharing === 'isolated' && (origin.group ?? origin.name) === (target.group ?? target.name));
 }
 
+// Keep this selection aligned with the claim brief and the engine's line
+// constitution. An unavailable snapshot is unknown, never proof of no checks.
+export function executableArticles(index, claimId) {
+  if (!index) return null;
+  const line = index.nodes.get(claimId)?.line ?? 'main';
+  const inherited = index.snap?.lines?.find(l => l.name === line)?.articles;
+  return [...index.nodes.values()].filter(n => n.kind === 'assumption' && n.constitution && n.check && n.status === 'holding' &&
+    !n.supersededBy && !n.supersededOn?.[line] && (n.line === line || (inherited ? inherited.includes(n.id) : !n.line)));
+}
+
 // ---- scope ------------------------------------------------------------------------------
 
 // The platform's scope rule, kept identical to src/core/scope.ts: `**` matches

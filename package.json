@@ -9,6 +9,9 @@
     "setup": "bun scripts/setup.mjs",
     "smoke": "bun scripts/smoke.mjs",
     "demo": "bun scripts/demo.mjs",
+    "cleanup": "bun scripts/cleanup.mjs",
+    "plan": "bun scripts/client.mjs plan",
+    "agents": "bun scripts/client.mjs agents",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build:play": "node scripts/build-play.mjs"

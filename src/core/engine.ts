@@ -837,21 +837,23 @@ export class Engine {
     this.markLanded(id, undefined, c.line);
   }
 
-  // Re-plan a stale claim: new statement, scope or assumptions. Its lease is
-  // extended again only once it no longer rests on anything contradicted.
+  // A holder may revise its own assumptions before global verification.
+  // Stale work may also change statement/scope to recover. Every revision
+  // keeps the previous plan; no other claim or finding changes status.
   replan(
     id: string,
     token: string,
     change: { statement?: string; scope?: string[]; restsOn: string[] },
   ): Claim {
     const c = this.held(id, token);
-    // Re-planning is how a stale claim gets back to work. A claim that is not
-    // stale keeps the scope and assumptions it was frozen with.
+    // Live work retains its frozen statement/scope but can stop relying on a
+    // disputed premise without waiting for someone else to judge it.
     const withdrawn = this.store.edgesTo(id, 'required for').some((e) => {
       const a = this.store.getNode(e.source);
       return a?.kind === 'assumption' && !this.assumptionHolds(a, c.line);
     });
-    if (c.status !== 'stale' && !withdrawn) throw new EngineError('not_stale', `claim ${id} is not stale; only a stale claim re-plans`);
+    const revisingOwnAssumptions = c.status === 'claimed' && change.scope === undefined && change.statement === undefined;
+    if (c.status !== 'stale' && !withdrawn && !revisingOwnAssumptions) throw new EngineError('not_stale', `claim ${id} is not stale; an active holder may revise assumptions, but its statement and scope remain frozen`);
     if (change.scope && !validScope(change.scope)) throw new EngineError('bad_request', 'a scope is 1 to 64 patterns of at most 256 characters');
     for (const a of change.restsOn) {
       if (!this.assumptionHolds(this.assumption(a), c.line)) {

@@ -1,116 +1,112 @@
 # Superpose
 
-**Coordination for many concurrent coding agents, built on Cloudflare Workers and Artifacts.** An entry for Cloudflare's "Build the next Git platform" competition (October 2026), by Kevin Joo.
+**A coordination layer for concurrent coding agents, built on Cloudflare Workers and Artifacts.** By Kevin Joo. MIT licensed.
 
-Git converges everything into one tree because its collaborators were human. Superpose keeps a graph. The unit of work is a **claim**: a frozen statement of what will be true when the work is done, with a declared scope, a base commit, and the assumptions it rests on. Commits are evidence for a claim, not the unit of meaning. Trees, boards and the served build are views over the graph.
+Agents can ship individually plausible changes that break one another’s assumptions. Superpose records what each agent is trying to make true, what it depends on, and what new evidence changes. It checks combined code against the owner’s **constitution**—standing promises about the product—and delivers findings to the work they affect.
 
-**Live:** https://superpose.kevinj507.workers.dev. Press **Watch agents build one now**: it starts a run on Cloudflare (or joins the one already going) and opens its live graph. No account, token or machine needed.
-- **What runs:** a container plans a procedural world on a new graph, and scripted agents work through its claims on both lines. Their commits are placeholders, so this run shows the coordination, not a finished world; the real run below has the world.
-- **The finding:** one agent reports that a shared random stream couples the modules.
-- **The decisions:** a director plays the human, verifying that finding and switching the served reality to the line that does not rest on it.
-- **Timing:** about 3 to 5 minutes from start to switch. The graph is deleted two hours later.
+[Open the live canvas](https://superpose.kevinj507.workers.dev) · [Runtime experiment](https://superpose.kevinj507.workers.dev/g/runtime-20261015t003452-g3) · [Discovery experiment](https://superpose-judge-check.kevinj507.workers.dev/g/discovery-20261015t030311-g3) · [Qualified recovery demo](https://superpose.kevinj507.workers.dev/g/demo-mv8zz0i6-32e70f)
 
-Open any graph at `/g/<graph>`; the served reality of a graph is at `/served/<graph>/`.
+## Clone, deploy, demonstrate
 
-**A real run to look at:** [`/g/world-rehearsal-0212`](https://superpose.kevinj507.workers.dev/g/world-rehearsal-0212). Two Claude Code agents built a procedural world two ways: one random stream shared by every module, or one stream per module.
-- **Found by an agent:** its claim asked for a test that links to a world survive a greedier forests module. On the shared-stream line that test failed; the agent traced the failure to the shared stream coupling modules and, unprompted, filed it as a finding against that assumption, with evidence.
-- **Propagated:** once verified, exactly the unfinished claims resting on it (two) went stale and re-planned; landed work resting on it was marked at risk.
-- **Switched:** the served world at [`/served/world-rehearsal-0212/`](https://superpose.kevinj507.workers.dev/served/world-rehearsal-0212/) moved to the other reality.
-- **Cost:** 19 agent runs, $0.22.
+Requires **Bun, Git, a Cloudflare Workers Paid account with Artifacts and Containers enabled, and a Cloudflare API token for that account**. The scripted demo needs no model subscription, local Docker, BB, or access to the author’s credentials. Checks execute in Cloudflare Containers using a public registry image.
 
-## What it does
+```sh
+git clone https://github.com/kevinj507/superpose.git
+cd superpose
+bun install --frozen-lockfile
 
-- **A repo and a token per claim.** Claiming work forks the claim's line into its own Artifacts repo. The agent gets a git write token that never outlives its lease. Renewing the lease renews the token, and finishing or handing the claim back revokes it. Pushing needs nothing new: plain `git clone`, `commit`, `push`.
-- **Every push is checked by the platform, not reported by the agent.** An Artifacts event trigger starts a Workflow for every push. It reads the commit, works out which files it changes against the claim's base, and judges them against the declared scope. Then, if the commit is in scope and still the claim's latest, a fresh Container fetches it and runs its tests. The verdict is recorded in a ledger keyed to the SHA; a new commit starts unverified.
-- **A finding reaches only the claims that rest on it.** An agent that discovers an assumption is false files a finding.
-  - While unverified, it stops nobody and runs beside the work as a hedge.
-  - Once verified, exactly the claims resting on that assumption go stale, directly or through claims built on them. Their agents hear at their next lease renewal, their tokens are not renewed until they re-plan, and their pre-finding work is kept. Everyone else keeps pushing.
-  - The cost of verifying a finding is shown before it fires.
-- **Landing is a real git merge, in dependency order, by one writer.** The graph's Durable Object lands finished claims one at a time per line, in three containers:
-  1. merge without running any project code;
-  2. run the tests on the merged result, holding only a read token;
-  3. move the line to that exact tested commit.
+# Supply CLOUDFLARE_API_TOKEN through your secret manager or environment.
+bun run setup --account-id YOUR_ACCOUNT_ID --name YOUR_UNIQUE_WORKER_NAME
+bun run smoke
+bun run demo
+```
 
-  Before the tests run, the exact merge is judged again: a landing that would change files outside its claim's scope is refused. A claim built on another waits for it to land, so its fork already contains that work. A conflict is recorded on the claim with its files, for a person to reopen it.
-- **Why a file is the way it is.** `GET /api/graphs/<graph>/why?path=<file>` lists the landed claims that changed it, each with the statement it set out to make true, the assumptions it rested on (and whether they still hold), the verdict on its commit and the merge that brought it in. Landing merges carry a `Superpose-Claim:` trailer, and the runner's commit hook adds it to agents' commits; a commit without one is flagged.
-- **Realities instead of a mainline.** A decision can be built two ways, as two lines. A finding's impact lists every reality: what in it is at risk, and which realities rest on nothing the finding contradicts. Switching what is served is one pointer change; the old reality stays retraceable. The served reality is a live website.
+Setup creates the Artifacts namespace, Worker, Workflows, Durable Objects and container application. It generates application credentials and saves them privately in ignored `.superpose/` files. Rerunning the same setup preserves those credentials. The chosen name isolates all installation resources; setup refuses to overwrite an existing Worker it has not deployed.
 
-**Measured on the live system** (`sim/layer2.mjs`, report in `sim/report-2026-10-12.json`, run on 2026-10-12). 97 scripted agents held real leases, each with its own repo and git token, renewing every 15 s. A finding was filed and left unverified for 20 s, and nobody was stopped. Once verified:
-- every one of the 9 affected agents heard within one renewal interval (at most 14 s);
-- none of the other 88 was told to stop;
-- Superpose accepted none of the 4 pushes made from stale claims (git took them, and each was recorded as stale).
+**Expected result:** the demo prints a live graph URL, detects a changed service, routes the contradiction to worker/retry work while excluding CSV, repairs the service, and lands the unchanged CSV commit through the normal CLI. All 11 final product checks should pass. A qualified run took about 2½ minutes; first container provisioning can take longer. This is a deterministic demonstration with scripted clients, clearly separate from the real-model experiments.
 
-## What an agent can and cannot do
+`bun run smoke` is a shorter deployment check: two concurrent clients push separate features through real Artifacts events, Cloudflare checks and shared landing. Receipts and CLI logs are saved under `.superpose/runs/<graph-id>/`. Commands fail with a nonzero exit when a required step fails.
 
-- **An agent's write access comes only from a lease.** Its git token can push to its own claim's repo and nowhere else, and lives no longer than its lease. Every token a lease held is revoked when the claim is finished, released or taken over, and otherwise expires with it. The 24-hour tokens that Artifacts' `create()` and `fork()` return are revoked at once.
-- **What changed is read by the platform, never taken from the agent.** Scope verdicts come from the commit's trees, and landing judges the exact merge again. A commit too large to list completely cannot land.
-- **Project code never runs next to a write token.** A check fetches with a read token in one process, then runs the project's code in another process with no token. A landing merges in a container that runs no project code, tests the merge in a second container with a read token only, and moves the line from a third.
-- **The served reality is sandboxed.** Agent-written pages are served with a CSP sandbox, so they run in an origin of their own.
-- **Five adversarial code reviews ran** (four reviewers, then two, two, one and one), plus live runs. Every finding is fixed; the fixes have tests except those to the playground and to Workflow steps, which were checked on live runs.
+For credentials, troubleshooting and cleanup, see [the setup guide](docs/setup.md). A coding agent can follow [AGENTS.md](AGENTS.md).
 
-## Cloudflare architecture
+## Why a statement layer over Git
 
-| Product | Role |
+A shared repository tells an agent what changed. It does not tell it which other work depended on an assumption that just stopped holding, whether a new finding is verified, or who should receive it. A human pull-request process usually supplies that context. Superpose makes it explicit enough for concurrent coding agents to use.
+
+For example, worker and retry agents may both assume a `budget_limit` response means a job is unaffordable. A service update can reuse that code for temporary capacity exhaustion. A finding about that contract belongs with those two agents; the agent extending CSV output should keep working. Superpose records the relationship, delivers the relevant evidence and preserves the old reasoning and code when a plan changes.
+
+## What replaces the pull-request workflow
+
+A **claim** states what will be true when work is done, its permitted files, its base commit and its assumptions. Taking it creates an Artifacts fork with a short-lived write token. Agents use ordinary Git; the platform reads their actual commits, checks scope and runs tests on the exact SHA.
+
+The constitution is owned by the product owner and lives outside claim scopes. Its executable articles run on each submitted commit combined with the shared line. A failure can identify an interacting landed change. If the same article already fails on the line alone, unrelated work waits without being falsely blamed; it is rechecked after repair. Declared runtime snapshots also trigger checks of the current shared code, so a service change can produce a finding without waiting for an agent to notice it.
+
+A **finding** records something that supports or contradicts existing work. Mechanical evidence can verify a contradiction and route it to affected claims. Those claims must re-plan; their existing code is retained. Other work continues. An uncertain finding remains uncertain: publication grants permission to read it, and does not make it true. A live holder can revise its own assumptions without changing its frozen statement or scope. Prose findings need owner judgment. An alternative line is an explicit choice, not an automatic fork for every suspicion.
+
+The graph retains claims, assumptions, findings, decisions, code identities and check results. The canvas lets a person inspect the evidence and follow what changed. Agents can propose new articles; adopting a new product promise remains an owner action.
+
+## Where Cloudflare is used
+
+| Cloudflare product | Responsibility |
 |---|---|
-| **Workers** | The HTTP API (`src/index.ts`), the canvas (`public/`) and the served reality |
-| **Durable Objects** (SQLite) | One per project graph (`src/graph.ts`): claims, leases, findings, the verdict ledger, lines. The single writer for coordination state and for landings |
-| **Artifacts** | A repo per line (`<graph>.line.<name>`) and per claim (`<graph>.claim.<id>`). Lease-scoped write tokens, plus reads of commits, trees and files for the scope check and the served site |
-| **Artifacts events → Workflows** | `cf.artifacts.repo.pushed` for the namespace starts `PushFlow` (scope check, then tests) for every push. `LandFlow` runs each landing |
-| **Containers** | A fresh container per check or landing step (`src/checker.ts`), from a public Node image; the playground's agents also run in one |
+| Workers | API, live canvas and served product |
+| Durable Objects with SQLite | Project graph, leases, evidence ledger, coordination and serialized landing |
+| Artifacts | Real Git repositories for shared lines and individual claims, scoped tokens and commit/tree access |
+| Artifacts events and Workflows | Push-triggered checks, durable verification and landing jobs |
+| Containers | Isolated execution of checks and Git integration steps |
 
-## Run it
+Coding agents can run on the owner’s machine. The repositories, coordination state, automatic checks and integration run on Cloudflare. Local containers used in research isolated coding groups; they did not replace the Cloudflare backend.
 
-**Watch it, with nothing to set up:** open https://superpose.kevinj507.workers.dev and press **Watch agents build one now**.
+## What the experiments showed
 
-**Run agents yourself:** plan a project and start agents against the hosted instance (needs `SUPERPOSE_ADMIN_TOKEN` and `SUPERPOSE_AGENT_KEY`), or deploy your own:
+Both pilots used nine isolated **gpt-6-luna / medium** coding sessions, three at a time, across vanilla Codex, optional shared notes and Superpose. All groups received the same task files and service evidence within each pilot. Controls shared a working tree; Superpose used claim forks and its real Cloudflare backend. The table reports delivered product checks, including failures.
+
+| Real-model pilot | Vanilla | Optional notes | Superpose | Observed behavior |
+|---|---:|---:|---:|---|
+| [Runtime change during feature work](docs/experiments/2026-10-15-runtime-results.md) | 8/11 | 8/11 | 10/11 | Automatic detection, targeted notification and repair worked. An unrelated CSV extension remained stranded. |
+| [Uncertain discovery from an ordinary bug report](docs/experiments/2026-10-15-unverified-results.md) | 11/11 | 11/11 | 5/11 | Two native agents discovered and shared unverified findings. Completion failed before any of their three checked commits landed. |
+
+In the runtime pilot, the platform detected the changed service in about 5.1 seconds and delivered the evidence to active affected holders about 0.84 seconds later. CSV was excluded from the contradiction, but its own checks incorrectly included a whole-product check against its older fork. That delivery failure motivated the separate recovery demonstration.
+
+In the discovery pilot, a normal bug report and accessible diagnostics were enough for both controls. Superpose's worker filed a finding, retry acknowledged the warning and filed another, and neither uncertain finding invalidated work. The platform then refused active assumption revision, and the CLI waited for a nonexistent executable-constitution check. The harness evaluated before outstanding completion commands finished. The preserved **5/11** is the delivered result, even though all three pushed commits passed their own checks.
+
+These are small exploratory pilots, not independent trials or evidence of a general speed/quality advantage. Superpose took longer in both. The notes folders stayed unused. Harness defaults also affected whether agents ran tests; the instruction audit was performed after the discovery run. An ordinary CI-alert comparison remains unrun, so the runtime result does not isolate graph routing from CI.
+
+### Separate mechanism qualification
+
+The default `bun run demo` uses **scripted clients, zero model calls**. Its later 11/11 result qualifies the repaired delivery path; it does not change either pilot's result. It demonstrates:
+
+1. Three concurrent holders with independent Artifacts forks: worker, retry and CSV.
+2. A declared service change that causes a real Cloudflare constitution check to fail.
+3. A finding routed to worker/retry, with CSV excluded.
+4. CSV's own checks passing while its combination waits for the already-broken shared line, without false blame.
+5. A worker repair followed by automatic rechecking and normal CLI completion of the **unchanged CSV commit**. Worker and CSV land; the idle retry holder is released.
+
+The post-discovery revision also fixes active assumption revision and completion under a prose-only constitution. Its separate no-model Cloudflare lifecycle qualification passed **20/20 checks**, with all three claims completed and landed. The [discovery results](docs/experiments/2026-10-15-unverified-results.md) preserve both the initial executor-startup failure and the successful qualification; neither is a rerun of the model experiment. Credential-free [receipts and pilot summaries](docs/evidence/) are included in the repository. See the [current demo walkthrough](docs/demo.md) for the scenes and evidence to inspect.
+
+## Current limits
+
+Executable constitution articles can be checked mechanically; prose promises still require owner judgment. Publication, verification and relevance are separate decisions. Existing code and unsuccessful evidence remain in the graph. Landing is serialized, and Git/check containers add latency. Proposed batching, lock-free landing and automatic agent replacement policies are not shipped optimizations. An agent's final message is not proof that its claim landed: inspect the backend state and receipt.
+
+## Bring real coding agents
+
+The scripted demo is the fastest way to verify your installation. To plan your own project, create a scenario folder with `seed/` code and a `plan.json` listing claims, scopes, assumptions and any executable constitution articles; the tiny scenario is a starting example. For an existing Claude Code login, the general runner can start three independent agents against a planned project:
 
 ```sh
-git clone https://github.com/kevinj507/superpose && cd superpose && npm install
-# Your Cloudflare account needs Workers Paid (Artifacts, Containers), and an API token
-# that can edit Workers, Durable Objects, Containers and Artifacts (or use: npx wrangler login).
-export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...
-# Create the Artifacts namespace "superpose" in the dashboard (Storage & databases > Artifacts), or:
-curl -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/artifacts/namespaces" \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" -d '{"namespace":"superpose"}'
-npx wrangler secret put ADMIN_TOKEN    # for planners and humans
-npx wrangler secret put AGENT_KEY      # for agents taking work
-npx wrangler deploy                    # Worker, Durable Objects, Workflows, push trigger, containers
+bun run plan scenarios/tiny --graph my-first-project
+bun run agents --graph my-first-project --agents 3 --agent claude --model haiku
 ```
 
-Then plan a project and start agents. Node 22.18+ and git are needed, plus Claude Code (logged in) for real agents:
-
-```sh
-export SUPERPOSE_URL=https://<your worker>.workers.dev SUPERPOSE_ADMIN_TOKEN=... SUPERPOSE_AGENT_KEY=...
-node runner/plan.mjs scenarios/world --graph demo            # seed the code, create assumptions, lines and claims
-node runner/run.mjs --graph demo --agents 3 --model sonnet   # real agents; --agent scripted needs no model
-```
-
-Open `/g/demo` to watch: claims colour as agents take, push, finish and land them. To see a finding propagate, file one from an agent's working copy:
-
-```sh
-node runner/superpose.mjs finding --contradicts <assumption> "<what is false>"
-```
-
-Then verify it with `POST /api/graphs/demo/findings/<id>/verify` (admin token). Only the claims resting on that assumption light up. `node sim/smoke.mjs` checks a deployment end to end. More is in `runner/README.md`.
+This optional path uses your model account and consumes model credits. Each holder gets its own Artifacts repository, claim brief, Git hooks and notices. [Runner documentation](runner/README.md) describes custom scenarios and the API/CLI for other agent launchers. The controlled gpt-6-luna research launchers under `runner/` have additional Linux/Docker/Codex requirements and are not the basic setup path.
 
 ## Develop
 
 ```sh
-npm install
-npx vitest run     # engine and coordinator in Node; the API and Durable Object in the local Workers runtime
-npx tsc --noEmit
+bun install --frozen-lockfile
+bun run test
+bun run typecheck
 ```
 
-Tests run against an in-memory git host (`src/core/fake-host.ts`) with real content-addressed trees, three-way merges and token checks, because Artifacts is not emulated locally. Containers and the push trigger run only when deployed. `sim/smoke.mjs` and `sim/layer2.mjs` run against a deployment.
+Tests use an in-memory Git host for local engine/API checks. Real Artifacts events and cloud containers are qualified by `bun run smoke` and `bun run demo` after deployment. Run `bun run build:play` when changing bundled runner files.
 
-## Layout
-
-- `src/core/`: the engine in plain TypeScript, with no Cloudflare dependency.
-  - `engine.ts`: claims, leases, findings, propagation, the ledger, landing, realities.
-  - `coordinator.ts`: the claim lifecycle across the git host.
-  - `repos.ts`: the git host interface and tree diff.
-  - `checks.ts` and `landing.ts`: the container scripts.
-- `src/graph.ts`: the per-graph Durable Object. `src/push-flow.ts` and `src/land-flow.ts`: the Workflows. `src/checker.ts`: the container. `src/artifacts-host.ts`: the Artifacts binding.
-- `public/`: the canvas. `runner/`: the agent runner. `scenarios/`: projects to run agents on. `sim/`: checks against a deployment.
-
-MIT licensed.
+`src/core/` contains the coordination engine; `src/graph.ts` the project Durable Object; `src/push-flow.ts` and `src/land-flow.ts` the Workflows; `src/artifacts-host.ts` the Git backend; `public/` the canvas; and `runner/` the agent clients. The [earlier world demonstration](docs/earlier-world-demo.md) remains as historical evidence.

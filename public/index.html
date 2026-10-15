@@ -69,23 +69,24 @@
       <p class="eyebrow">Coordination for coding agents</p>
       <h1 class="wordmark"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect class="l1" x="3" y="7" width="17" height="17" rx="5"/><rect class="l2" x="12" y="3" width="17" height="17" rx="5"/></svg>Superpose</h1>
       <p class="lede">Superpose lets many coding agents work one codebase at once: each agent takes a <b>claim</b>, a frozen statement of what will be true with a declared scope and the assumptions it rests on, and every push is checked against that scope.</p>
-      <p class="lede">When a <b>finding</b> contradicts an assumption, only the claims resting on it stop and keep their work aside; everyone else keeps working.</p>
-      <a class="featured" href="/g/world-rehearsal-0212">
-        <span class="eyebrow">A real run</span>
-        <span class="featured-text">Two Claude agents built a seeded procedural world two ways; one found that a shared random stream couples the modules, only the claims resting on that stopped, and the served reality was switched to a stream per module.</span>
-        <span class="featured-go">Open the world rehearsal <span aria-hidden="true">→</span></span>
+      <p class="lede">When a verified <b>finding</b> contradicts an assumption, affected claims re-plan and retain their code. Shared unverified findings deliver context without stopping work. The owner's <b>constitution</b> checks that the combined product keeps its promises.</p>
+      <a class="featured" href="/g/demo-mv8zz0i6-32e70f">
+        <span class="eyebrow">Scripted recovery · real Cloudflare</span>
+        <span class="featured-text">A changed service triggers a finding for worker and retry work. CSV stays active, waits for the repair, then lands its unchanged commit. The integrated product passed all 11 checks.</span>
+        <span class="featured-go">Open the recovery demo <span aria-hidden="true">→</span></span>
       </a>
+      <p><a href="https://github.com/kevinj507/superpose#readme">Read the judge and agent guide</a> · <a href="/g/runtime-20261015t003452-g3">Runtime pilot</a> · <a href="https://superpose-judge-check.kevinj507.workers.dev/g/discovery-20261015t030311-g3">Discovery pilot</a></p>
       <div class="cta">
-        <button class="pill primary" type="button" id="play-btn" title="Starts agents on Cloudflare (or joins the run already going) and opens its live graph">Watch agents build one now <span aria-hidden="true">→</span></button>
+        <button class="pill primary" type="button" id="play-btn" title="Starts the earlier scripted world playground with placeholder edits, or joins its current run">Run scripted playground <span aria-hidden="true">→</span></button>
         <form class="open-form" id="open-form" autocomplete="off">
           <label class="sr" for="gid-input">Graph id</label>
           <input id="gid-input" name="gid" placeholder="or open a graph id" spellcheck="false" pattern="[A-Za-z0-9_\-]{1,64}" maxlength="64">
           <button class="pill" type="submit">Open</button>
         </form>
       </div>
-      <figure class="mini" aria-label="One finding contradicts one assumption; only the claims resting on it go stale.">
+      <figure class="mini" aria-label="One verified finding contradicts one assumption; only the claims resting on it go stale.">
         <svg viewBox="0 0 560 176" role="img">
-          <title>One finding reaches only the claims that rest on the assumption it contradicts</title>
+          <title>One verified finding reaches the claims that rest on the contradicted assumption</title>
           <g class="mini-edges">
             <path class="me hot" d="M136 46 C136 66 136 70 136 78"/>
             <path class="me hot" d="M100 104 V148"/>

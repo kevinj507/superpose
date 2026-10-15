@@ -22,6 +22,15 @@ function setup(options = {}) {
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe('challenge session protocol', () => {
+  it('retains running-command state after the model turn completes', async () => {
+    const {sessionPromise,provider}=setup();const session=await sessionPromise;
+    const turn=session.turn('submit work');await Promise.resolve();
+    provider.onEvent({method:'item/started',params:{item:{id:'submit',type:'commandExecution'}}});
+    provider.onEvent({method:'turn/completed',params:{turn:{id:'turn-1',status:'completed'}}});
+    await turn;expect(session.state.activeCommands).toBe(1);
+    provider.onEvent({method:'item/completed',params:{item:{id:'submit',type:'commandExecution',exitCode:0}}});
+    expect(session.state.activeCommands).toBe(0);await session.close();
+  });
   it('can leave an idle notice queued without starting an extra model turn', async () => {
     const turn = vi.fn();
     const {sessionPromise} = setup({turn}); const session = await sessionPromise;

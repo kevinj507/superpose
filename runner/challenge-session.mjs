@@ -41,10 +41,16 @@ export async function startChallengeSession({ cwd, gateway, image, stateDir, rol
   mkdirSync(stateDir, { recursive: true });
   const eventPath = join(stateDir, `${role.id}.jsonl`);
   let activeTurn = null, closed = false, sessionId = null, state = null, lastUsage = { inputTokens: 0, outputTokens: 0 };
+  const activeCommands = new Set();
   const emit = event => { appendFileSync(eventPath, `${JSON.stringify(event)}\n`); onEvent(event); };
   const providerEvent = event => {
     emit({ kind: 'provider-event', role: role.id, session: sessionId, at: Date.now(), event });
     const method = event.method, params = event.params ?? {}, item = params.item ?? {};
+    if (item.type === 'commandExecution' && item.id != null) {
+      if (method === 'item/started') activeCommands.add(item.id);
+      if (method === 'item/completed') activeCommands.delete(item.id);
+      if (state) state.activeCommands = activeCommands.size;
+    }
     if (method === 'item/started' && ACTION_TYPES.has(item.type) && activeTurn) {
       if (item.id == null || !activeTurn.actions.has(item.id)) {
         if (item.id != null) activeTurn.actions.add(item.id);
@@ -83,7 +89,7 @@ export async function startChallengeSession({ cwd, gateway, image, stateDir, rol
   const isolated = await isolatedFactory({ cwd, gateway, image, onEvent: providerEvent });
   sessionId = isolated.sessionId;
   if (!sessionId || !isolated.thread || isolated.model !== MODEL) { await isolated.close?.(); throw new Error('Isolated provider session identity or model check failed'); }
-  state = { toolchain: isolated.toolchain, status: 'ready', interruptReason: null, actions: budget.actions, sessionId, role: role.id, model: isolated.model, startedAt: null, finishedAt: null };
+  state = { toolchain: isolated.toolchain, status: 'ready', interruptReason: null, actions: budget.actions, activeCommands: activeCommands.size, sessionId, role: role.id, model: isolated.model, startedAt: null, finishedAt: null };
   function settleActive(result) {
     const p = activeTurn; if (!p) return;
     activeTurn = null; p.resolve(result);

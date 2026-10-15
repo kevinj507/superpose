@@ -1,0 +1,118 @@
+{
+  "graph": "demo-mv8zz0i6-32e70f",
+  "canvas": "https://superpose.kevinj507.workers.dev/g/demo-mv8zz0i6-32e70f",
+  "scripted": true,
+  "modelCalls": 0,
+  "checks": [
+    {
+      "name": "initial constitution passes on real Cloudflare",
+      "pass": true
+    },
+    {
+      "name": "finding identifies the exact code, article and runtime version",
+      "pass": true
+    },
+    {
+      "name": "finding routes to worker and retry, excluding CSV",
+      "pass": true
+    },
+    {
+      "name": "worker receives the appropriate contradiction notices",
+      "pass": true
+    },
+    {
+      "name": "retry receives the appropriate contradiction notices",
+      "pass": true
+    },
+    {
+      "name": "csv receives the appropriate contradiction notices",
+      "pass": true
+    },
+    {
+      "name": "CSV remains active; the gate does not falsely blame its commit",
+      "pass": true
+    },
+    {
+      "name": "automatic recheck accepts the same CSV commit after repair",
+      "pass": true
+    },
+    {
+      "name": "the automatic finding remains on record and is resolved",
+      "pass": true
+    },
+    {
+      "name": "all 11 integrated product checks pass",
+      "pass": true
+    }
+  ],
+  "baseSha": "2053e7ecb070ea6291a4dadde4bd366a79066665",
+  "claims": [
+    {
+      "role": "worker",
+      "id": "c1",
+      "sha": "6f81459cec7116547f7284a82958e8664755c59b"
+    },
+    {
+      "role": "retry",
+      "id": "c2"
+    },
+    {
+      "role": "csv",
+      "id": "c3",
+      "sha": "317ed4a674901fdbea4615ebf6481a23cce6e1e5"
+    }
+  ],
+  "sharedSha": "940289b75c1f4bf103a47680c64242df9a1e5c9d",
+  "pass": true,
+  "elapsedMs": 158856,
+  "workerVersion": "ff4a4f2a-3b0a-42d3-9b5a-1d88806f70c4",
+  "evaluation": {
+    "pass": true,
+    "checks": [
+      {
+        "name": "initial-affordable-completion",
+        "pass": true
+      },
+      {
+        "name": "initial-budget-stops",
+        "pass": true
+      },
+      {
+        "name": "rolled-affordable-completion",
+        "pass": true
+      },
+      {
+        "name": "rolled-budget-stops",
+        "pass": true
+      },
+      {
+        "name": "effects-execute-once",
+        "pass": true
+      },
+      {
+        "name": "bounded-pending",
+        "pass": true
+      },
+      {
+        "name": "budget-prevents-effects",
+        "pass": true
+      },
+      {
+        "name": "exact-csv",
+        "pass": true
+      },
+      {
+        "name": "receipt-feature",
+        "pass": true
+      },
+      {
+        "name": "queue-feature-current-service",
+        "pass": true
+      },
+      {
+        "name": "csv-report-feature",
+        "pass": true
+      }
+    ]
+  }
+}

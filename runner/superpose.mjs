@@ -40,6 +40,7 @@ import {
   peekUnread,
   quoteStatement,
   readClaim,
+  executableArticles,
   readMarker,
   readNotices,
   readSeenSeq,
@@ -506,6 +507,7 @@ async function pairFor(api, claim, sha, waitSeconds) {
   while (Date.now() - started < waitSeconds * 1000) {
     const index = await snapshotIndex(api);
     row = index?.pushes.find((p) => p.claim === claim.claim && p.sha === sha) ?? row;
+    if (executableArticles(index, claim.claim)?.length === 0) return { ...row, pair: { status: 'skipped' } };
     if (row?.pair?.status === 'blocked' && !waitingOnLine) {
       say('Waiting for the shared line to be repaired. These articles also fail without your change; your commit is retained and will be rechecked automatically.');
       waitingOnLine = true;

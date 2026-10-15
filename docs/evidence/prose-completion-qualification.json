@@ -1,0 +1,112 @@
+{
+  "graphId": "discovery-qual-mv8zqmlj",
+  "url": "https://superpose-judge-check.kevinj507.workers.dev",
+  "modelCalls": 0,
+  "startedAt": 1792035620839,
+  "checks": [
+    {
+      "name": "candidate remains unverified",
+      "pass": true
+    },
+    {
+      "name": "candidate stays local before owner publication",
+      "pass": true
+    },
+    {
+      "name": "publication preserves uncertainty",
+      "pass": true
+    },
+    {
+      "name": "worker executor cannot read operator files or modify shared runtime",
+      "pass": true
+    },
+    {
+      "name": "worker other-group API is denied",
+      "pass": true
+    },
+    {
+      "name": "worker actual scoped CLI presents the appropriate uncertainty",
+      "pass": true
+    },
+    {
+      "name": "retry executor cannot read operator files or modify shared runtime",
+      "pass": true
+    },
+    {
+      "name": "retry other-group API is denied",
+      "pass": true
+    },
+    {
+      "name": "retry actual scoped CLI presents the appropriate uncertainty",
+      "pass": true
+    },
+    {
+      "name": "csv executor cannot read operator files or modify shared runtime",
+      "pass": true
+    },
+    {
+      "name": "csv other-group API is denied",
+      "pass": true
+    },
+    {
+      "name": "csv actual scoped CLI presents the appropriate uncertainty",
+      "pass": true
+    },
+    {
+      "name": "uncertain publication invalidates no claim",
+      "pass": true
+    },
+    {
+      "name": "prose promise has no executable checker",
+      "pass": true
+    },
+    {
+      "name": "refutation keeps existing holders and branches",
+      "pass": true
+    },
+    {
+      "name": "a live holder can revise its own premise without verification",
+      "pass": true
+    },
+    {
+      "name": "worker ordinary completion skips absent executable checks",
+      "pass": true
+    },
+    {
+      "name": "csv ordinary completion skips absent executable checks",
+      "pass": true
+    },
+    {
+      "name": "retry ordinary completion skips absent executable checks",
+      "pass": true
+    },
+    {
+      "name": "all three prose-only claims land through their normal CLI",
+      "pass": true
+    }
+  ],
+  "pass": true,
+  "finishedAt": 1792035740114,
+  "workerVersion": "9565012c-b3ae-42aa-a0f8-5cae0934e0b6",
+  "claims": [
+    {
+      "id": "c1",
+      "status": "landed",
+      "headSha": "2d46d22b2a027b1e771bd84f17d618773849099f",
+      "landedSha": "3c031d4bbde42e116c99559e05f24649791d6bc6"
+    },
+    {
+      "id": "c2",
+      "status": "landed",
+      "headSha": "738a1601a1ae3daa4ce38c306eac0298c550acae",
+      "landedSha": "4dbe3442dec5f31e5a133844a90514b8a7a6fe36"
+    },
+    {
+      "id": "c3",
+      "status": "landed",
+      "headSha": "35c26555668a5613044d5138a6e3240835b213a9",
+      "landedSha": "f1735ee193e2785f278f31d1263a3b1122ff1b8c"
+    }
+  ],
+  "limits": "Scripted qualification, not a model rerun or a final product-correctness test. Pending provider-command settlement has unit coverage, not a new live-model outcome."
+}
