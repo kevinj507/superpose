@@ -422,7 +422,7 @@ export function latestSeq(index) {
 // said about it before: the kinds below stand until acted on (verdicts on
 // old pushes do not, so they are left out of that first read).
 
-export const STANDING_NOTICES = new Set(['claim.helped', 'claim.stale', 'scope.touched', 'claim.landing_failed', 'reality.at_risk', 'finding.shared', 'finding.external_checked', 'article.adopted', 'article.rejected', 'decision.opened', 'decision.answered']);
+export const STANDING_NOTICES = new Set(['inputs.changed', 'inputs.checked', 'claim.helped', 'claim.stale', 'scope.touched', 'claim.landing_failed', 'reality.at_risk', 'finding.shared', 'finding.external_checked', 'article.adopted', 'article.rejected', 'decision.opened', 'decision.answered']);
 
 // What agents must not finish without having read: everything the platform
 // says about the work itself, as opposed to receipts for their own actions.
@@ -565,6 +565,10 @@ export function describeNotice(n, index, claimId) {
     ids.map((id) => `${id} ${quoteStatement(node(id))}`).join('; ') || '(unknown assumption)';
   const base = { seq: n.seq, type: n.type, at: Date.now(), data: d };
   switch (n.type) {
+    case 'inputs.changed':
+      return { ...base, title: 'RUNTIME INPUTS CHANGED', text: `Declared inputs for ${d.line} are now version ${d.inputVersion}. Previous checks do not verify this version. The platform is checking the product promises again.` };
+    case 'inputs.checked':
+      return { ...base, title: `RUNTIME CHECK: ${d.status}`, text: `Code ${shortSha(d.sha ?? '')}, input version ${d.inputVersion}.\n${d.log ?? ''}` };
     case 'finding.shared':
       return { ...base, title: `SHARED FINDING: ${d.finding} (${d.status === 'unverified' ? 'candidate, not verified' : d.status})`,
         text: `The owner published this finding to your line: “${d.statement ?? ''}”. ${d.status === 'unverified' ? 'Publication is permission to read it, not evidence that it is true. It does not stop your work.' : 'Read the evidence and any accompanying notice about affected work.'}` };
@@ -583,6 +587,11 @@ export function describeNotice(n, index, claimId) {
     case 'decision.answered':
       return { ...base, title: `INVESTIGATION DECISION: ${d.answer}`, text: `The owner answered ${d.decision}: ${d.reason ?? ''}. This changes investigation permission, not whether the finding is true.` };
     case 'claim.stale':
+      if (d.runtimeEvidence) {
+        const evidence = d.runtimeEvidence;
+        return { ...base, title: `STALE: the current service breaks ${assumptionList(d.assumptions)}`,
+          text: `Finding ${d.finding}: ${d.statement}\nThe adopted check failed on ${evidence.line} at ${shortSha(evidence.sha)}, input version ${evidence.inputVersion}. Your scope includes modules used by this check. This identifies relevant work; it does not establish which claim caused the failure.\nRead the check output in .superpose/NOTICES.md. Re-plan with \`${CMD} replan --rests-on <ids that still hold, or none>\`, repair within your scope, commit and push. The platform checks the repair against the current service before completion.` };
+      }
       if (d.constitution) {
         const partners = (d.where ?? []).filter((w) => w !== claimId);
         return {
@@ -692,6 +701,7 @@ export function describeNotice(n, index, claimId) {
         text: 'It has been unverified for longer than the hedge window; a human has been asked to decide. Carry on meanwhile.',
       };
     case 'reality.at_risk':
+      if (d.runtimeEvidence) return { ...base, title: 'AT RISK: a product promise fails with the current service', text: `Finding ${d.finding}: ${assumptionList(d.assumptions)} failed on ${d.runtimeEvidence.line} at ${shortSha(d.runtimeEvidence.sha)}, input version ${d.runtimeEvidence.inputVersion}. This landed work includes modules used by the check; no individual culprit has been established.` };
       if (Array.isArray(d.where)) {
         return {
           ...base,

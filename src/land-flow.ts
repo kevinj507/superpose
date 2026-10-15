@@ -37,7 +37,7 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
       const ctx = await step.do('find the line and the claim', async () => {
         const r = await stub.landingContext(line, claim);
         if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
-        return { line: r.value.line, claim: r.value.claim, statement: r.value.statement, scope: r.value.scope, articles: r.value.articles };
+        return { line: r.value.line, claim: r.value.claim, statement: r.value.statement, scope: r.value.scope, articles: r.value.articles, inputs: r.value.inputs };
       });
       // Platform trouble (no container, a failed fetch) throws, so the step
       // is retried; a conflict is an answer, not an error.
@@ -64,7 +64,8 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
         const configured = await readCheckConfig(host, ctx.line.name, merged.merge);
         const current = await stub.landingContext(line, claim);
         if (!current.ok) throw new Error(current.message);
-        return landingChecks(configured, current.value.articles);
+        const checks = landingChecks(configured, current.value.articles);
+        return checks ? { ...checks, ...(ctx.inputs ? { inputs: ctx.inputs } : {}) } : checks;
       });
       if (config) {
         let run: CheckRun;
@@ -86,9 +87,11 @@ export class LandFlow extends WorkflowEntrypoint<Env, LandParams> {
         if (failed) return failed;
       }
       return step.do('move the line to the tested merge', retry, async () => {
+        const current = await stub.checkInputs(line);
+        if (!current.ok || current.value?.version !== ctx.inputs?.version) return { status: 'error' as const, log: 'Declared runtime inputs changed while landing; the old check cannot authorize promotion.' };
         const r = await promoteLanding(host, container('promote'), ctx.line, claim, merged.merge);
         if (r.status === 'error') throw new Error(r.log ?? 'could not move the line');
-        return r;
+        return r.status === 'landed' ? { ...r, inputVersion: ctx.inputs?.version } : r;
       });
     })().catch((err): LandingOutcome => ({ status: 'error', log: String(err).slice(0, 2000) }));
 

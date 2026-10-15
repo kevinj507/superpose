@@ -22,6 +22,12 @@ function setup(options = {}) {
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe('challenge session protocol', () => {
+  it('can leave an idle notice queued without starting an extra model turn', async () => {
+    const turn = vi.fn();
+    const {sessionPromise} = setup({turn}); const session = await sessionPromise;
+    expect(await session.notify('a queued product notice', {activeOnly: true})).toBe(false);
+    expect(turn).not.toHaveBeenCalled(); await session.close();
+  });
   it('steers checked evidence into the actual running turn and records its receipt', async () => {
     const { sessionPromise, provider, events } = setup();
     const session = await sessionPromise;

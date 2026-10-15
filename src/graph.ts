@@ -71,7 +71,7 @@ export class Graph extends DurableObject<Env> {
     }
   }
 
-  addAssumption(statement: string, extra: { constitution?: boolean; check?: string } = {}) {
+  addAssumption(statement: string, extra: { constitution?: boolean; check?: string; paths?: string[] } = {}) {
     return this.run((e) => e.addAssumption(statement, extra));
   }
 
@@ -128,11 +128,44 @@ export class Graph extends DurableObject<Env> {
   // ---- the gate on pairs: the constitution on a push merged with the line ----
 
   pairContext(id: string) {
-    return this.run((e) => e.pairContext(id));
+    return this.run((e) => {
+      const context = e.pairContext(id);
+      return 'skip' in context ? context : { ...context, inputs: e.line(e.getClaim(id).line).checkInputs };
+    });
   }
 
-  beginPair(id: string, sha: string, owner?: string) {
-    return this.run((e) => e.beginPair(id, sha, owner));
+  async setCheckInputs(graph: string, line: string, required: string[], values: import('./core/types').CheckInputs['values'], baseVersion: number) {
+    const prepared = await this.runWithRepos(graph, c => c.ensureLine(line));
+    if (!prepared.ok) return prepared;
+    const result = this.run(e => e.setCheckInputs(line, required, values, baseVersion));
+    if (result.ok) { await this.startInputCheck(graph, line); await this.startPairRechecks(line); }
+    return result;
+  }
+
+  checkInputs(line: string) { return this.run(e => e.line(line).checkInputs); }
+
+  async inputCheckContext(line: string) {
+    const result = this.run(e => ({ line: e.line(line), articles: e.constitution(line).filter(a => a.check).map(a => ({ id: a.id, check: a.check! })) }));
+    if (!result.ok || !result.value.line.repo || !result.value.line.checkInputs) return null;
+    const sha = await this.repoHost.readHead(result.value.line.repo.name);
+    if (!sha) return null;
+    return { repo: result.value.line.repo, sha, inputs: result.value.line.checkInputs, articles: result.value.articles };
+  }
+
+  async recordInputCheck(line: string, sha: string, version: number, runs: { article: string; check: CheckRun }[]) {
+    const current = this.run(e => e.line(line).repo);
+    const currentCode = current.ok && !!current.value && await this.repoHost.readHead(current.value.name) === sha;
+    return this.run(e => e.recordInputCheck(line, sha, version, runs, currentCode));
+  }
+
+  private async startInputCheck(graph: string, line: string) {
+    if (!this.env.PUSHES || this.repoHost instanceof FakeRepoHost) return;
+    const repo = this.run(e => e.line(line).checkInputs ? e.line(line).repo : undefined);
+    if (repo.ok && repo.value) await this.env.PUSHES.create({ params: { type: 'superpose.inputs.check', source: { repoName: repo.value.name }, payload: { ref: line, before: '', after: '' } } });
+  }
+
+  beginPair(id: string, sha: string, owner?: string, expectedInputVersion?: number) {
+    return this.run((e) => e.line(e.getClaim(id).line).checkInputs?.version === expectedInputVersion && e.beginPair(id, sha, owner));
   }
 
   recordPair(id: string, sha: string, pair: PairCheck) {
@@ -240,7 +273,7 @@ export class Graph extends DurableObject<Env> {
       const c = e.getClaim(claim);
       const l = e.line(line);
       if (!c.repo || !l.repo) throw new EngineError('no_repo', `no repo for ${claim} or line ${line}`);
-      return { line: l.repo, claim: c.repo, statement: c.statement, scope: c.scope, articles: e.constitution(line).filter((a) => a.check).map((a) => ({ id: a.id, check: a.check! })) };
+      return { line: l.repo, claim: c.repo, statement: c.statement, scope: c.scope, articles: e.constitution(line).filter((a) => a.check).map((a) => ({ id: a.id, check: a.check! })), inputs: l.checkInputs };
     });
   }
 
@@ -248,7 +281,7 @@ export class Graph extends DurableObject<Env> {
     const r = this.run((e) => e.completeLanding(line, claim, outcome, landing));
     await this.pumpLandings(graph);
     // The line moved: every in-flight head on it is paired with it again.
-    if (r.ok && r.value && outcome.status === 'landed') await this.startPairRechecks(line);
+    if (r.ok && r.value && outcome.status === 'landed') { await this.startPairRechecks(line); await this.startInputCheck(graph, line); }
     return r;
   }
 

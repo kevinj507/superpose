@@ -67,7 +67,7 @@ export function prepareMinimalFixture(directory,{reference=false}={}) {
  for(const [path,content]of Object.entries(files)){const file=join(directory,path);mkdirSync(resolve(file,'..'),{recursive:true});writeFileSync(file,content);}
  return files;
 }
-export function evaluateMinimal(checkout) {
+export function evaluateMinimal(checkout,{execute}={}) {
  const script=`import {runJob} from './src/worker.mjs';import {runJobs} from './src/retry.mjs';import {exportCsv} from './src/export.mjs';
  const makeService=({mode})=>{const attempts=new Map();let executions=0;return{get executions(){return executions;},async execute(job){const n=(attempts.get(job.id)??0)+1;attempts.set(job.id,n);if(job.cost>.01)return{ok:false,code:'budget_limit'};if(job.id==='pressure'&&n===1)return{ok:false,code:mode==='rolled'?'budget_limit':'capacity_limit',retryAfterMs:1,status:429};executions++;return{ok:true,value:'receipt:'+job.id};}};};
  const checks=[];const check=(name,pass,detail)=>checks.push({name,pass:Boolean(pass),detail});
@@ -76,7 +76,7 @@ export function evaluateMinimal(checkout) {
  try{let calls=0;const service={async execute(){calls++;return {ok:false,code:'capacity_limit',retryAfterMs:1};}};const out=await runJobs([{id:'still-busy',cost:.001}],{service,budget:.01,effects:new Map(),maxAttempts:2});check('bounded-pending',calls===2&&out.pending?.length===1&&out.completed?.length===0&&out.stopped?.length===0,{calls,out});let blocked=0;const row=await runJob({id:'costly',cost:.1},{service:{async execute(){blocked++;return{ok:true,value:'wrong'};}},budget:.01,effects:new Map()});check('budget-prevents-effects',blocked===0&&row.state==='stopped',{blocked,row});}catch(e){check('bounded-pending',false,e.message);}
  try{const csv=exportCsv([{id:'a,"b',elapsedMs:4,state:'completed'},{id:'line\\nbreak',elapsedMs:0,state:'stopped'}]);check('exact-csv',csv==='job_id,elapsed_ms,state\\n"a,""b",4,completed\\n"line\\nbreak",0,stopped\\n',csv);}catch(e){check('exact-csv',false,e.message);}
  console.log(JSON.stringify({pass:checks.every(c=>c.pass),checks}));`;
- const r=spawnSync(process.execPath,['--eval',script],{cwd:checkout,encoding:'utf8',timeout:15000});
+ const r=execute?execute({script}):spawnSync(process.execPath,['--eval',script],{cwd:checkout,encoding:'utf8',timeout:15000});
  if(r.status!==0)return {pass:false,error:r.stderr.slice(-1800)};
  return JSON.parse(r.stdout.trim().split('\n').at(-1));
 }

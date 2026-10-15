@@ -1,5 +1,6 @@
 import type { RepoHost } from './repos';
-import type { CheckRun } from './types';
+import type { CheckRun, CheckInputs } from './types';
+import { CHECK_INPUT_GUARD, checkInputEnv } from './check-inputs';
 
 // How a repo says what its checks are: `superpose.json` at the root, e.g.
 //   { "setup": "npm ci", "check": "npm test", "timeoutSeconds": 300 }
@@ -9,6 +10,7 @@ export interface CheckConfig {
   setup?: string;
   check: string;
   timeoutSeconds: number;
+  inputs?: CheckInputs;
 }
 
 const DEFAULT_TIMEOUT = 300;
@@ -58,6 +60,7 @@ git checkout -q FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
 export const RUN_SCRIPT = `
 set -u
 cd /work || exit ${EXIT_FETCH_FAILED}
+${CHECK_INPUT_GUARD}
 run() {
   timeout -k 5 "$TIMEOUT" sh -c "$1" > /tmp/out.log 2>&1
   code=$?
@@ -87,10 +90,11 @@ export interface ExecOutcome {
 // What the outcome of a check run means for the verdict.
 export function checkRunFrom(outcome: ExecOutcome, config: CheckConfig, startedAt: number, finishedAt: number): CheckRun {
   const log = tail(`${outcome.stdout}${outcome.stderr ? `\n${outcome.stderr}` : ''}${outcome.error ? `\n${outcome.error}` : ''}`);
-  const base = { command: config.check, startedAt, finishedAt, log };
+  const base = { command: config.check, startedAt, finishedAt, log, ...(config.inputs ? { inputVersion: config.inputs.version } : {}) };
   if (outcome.error || outcome.exitCode === null) return { ...base, status: 'error' };
   const exitCode = outcome.exitCode;
   if (exitCode === 0) return { ...base, status: 'passed', exitCode };
+  if (exitCode === 94 && config.inputs) return { ...base, status: 'error', exitCode };
   // Only the fetch step speaks for the platform: whatever exit code the
   // project's own code ends with is a verdict on the code.
   if (exitCode === EXIT_FETCH_FAILED && (outcome.step ?? 0) === 0) return { ...base, status: 'error', exitCode };
@@ -141,7 +145,7 @@ export async function runCheck(
     const outcome = await exec({
       steps: [
         { script: FETCH_SCRIPT, env: { GIT_TOKEN: token.secret, REMOTE: repo.remote, SHA: sha } },
-        { script: RUN_SCRIPT, env: { SETUP: config.setup ?? '', CHECK: config.check, TIMEOUT: String(config.timeoutSeconds) } },
+        { script: RUN_SCRIPT, env: { SETUP: config.setup ?? '', CHECK: config.check, TIMEOUT: String(config.timeoutSeconds), ...checkInputEnv(config.inputs) } },
       ],
       timeoutSeconds: config.timeoutSeconds,
     });

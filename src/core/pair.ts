@@ -1,6 +1,7 @@
 import { EXIT_FETCH_FAILED, EXIT_MERGE_CONFLICT, tail, type CheckConfig, type ExecJob, type ExecOutcome } from './checks';
 import type { RepoHost } from './repos';
 import type { PairCheck, RepoRef } from './types';
+import { CHECK_INPUT_GUARD, checkInputEnv } from './check-inputs';
 
 // The gate on combinations. A claim's own checks run on its commit alone;
 // the break the pricing test showed lives in the combination, so at every
@@ -65,6 +66,7 @@ touch /work/.pair-ready
 
 export const PAIR_RUN_SCRIPT = `
 set -u
+${CHECK_INPUT_GUARD}
 [ -f /work/.pair-ready ] || { echo "PAIR SKIPPED"; exit 0; }
 TAB="$(printf '\\t')"
 run() {
@@ -148,6 +150,7 @@ export async function checkPair(host: RepoHost, exec: Exec, job: PairJob, now: (
             env: {
               SETUP: job.config.setup ?? '',
               CHECKS: job.articles.map((a) => `${a.id}\t${a.check}`).join('\n'),
+              ...checkInputEnv(job.config.inputs),
               TIMEOUT: String(perRun),
               CANDIDATES: candidates.map((c) => c.claim).join(' '),
             },
@@ -155,7 +158,7 @@ export async function checkPair(host: RepoHost, exec: Exec, job: PairJob, now: (
         ],
         timeoutSeconds,
       });
-      return pairResult(outcome, startedAt, now());
+      return { ...pairResult(outcome, startedAt, now()), ...(job.config.inputs ? { inputVersion: job.config.inputs.version } : {}) };
     } finally {
       await host.revokeToken(job.claim.name, claimToken.id).catch(() => {});
     }

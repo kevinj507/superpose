@@ -1,4 +1,5 @@
 import type { Result } from './graph';
+import type { CheckInputs } from './core/types';
 
 export { Graph } from './graph';
 export { Checker } from './checker';
@@ -73,7 +74,7 @@ route('DELETE', '/api/graphs/:gid', 'admin', ({ graph, params }) => graph.destro
 // rule, run by the gate on every push merged with the line when it has a
 // `check` (a command at the repo root), judged when it has none.
 route('POST', '/api/graphs/:gid/assumptions', 'admin', ({ graph, body }) =>
-  graph.addAssumption(str(body.statement), { constitution: body.constitution === true, check: str(body.check) || undefined }),
+  graph.addAssumption(str(body.statement), { constitution: body.constitution === true, check: str(body.check) || undefined, ...(body.paths ? { paths: strs(body.paths) } : {}) }),
 );
 route('POST', '/api/graphs/:gid/claims', 'admin', ({ graph, body }) =>
   graph.addClaim({
@@ -132,6 +133,7 @@ route('POST', '/api/graphs/:gid/lines/:line', 'admin', ({ graph, params, body })
   return graph.createLine(params.gid!, { name: params.line!, from: str(body.from), ...labels });
 });
 route('POST', '/api/graphs/:gid/lines/:line/serve', 'admin', ({ graph, params }) => graph.serve(params.line!));
+route('POST', '/api/graphs/:gid/lines/:line/check-inputs', 'admin', ({ graph, params, body }) => graph.setCheckInputs(params.gid!, params.line!, strs(body.required), body.values as CheckInputs['values'], Number(body.baseVersion)));
 route('POST', '/api/graphs/:gid/lines/:line/abandon-landing', 'admin', ({ graph, params }) => graph.abandonLanding(params.gid!, params.line!));
 route('POST', '/api/graphs/:gid/lines/:line/access', 'admin', ({ graph, params, body }) =>
   graph.lineAccess(params.gid!, params.line!, body.scope === 'write' ? 'write' : 'read', Number(body.ttl) || 3600),

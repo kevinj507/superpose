@@ -54,6 +54,17 @@ async function pushTo(gid: string, claim: string, lease: string, files: Record<s
 }
 
 describe('the API in front of the graph', () => {
+  it('publishes runtime check inputs only for the owner with version and JSON validation', async () => {
+    const g = `/api/graphs/t${++graphSeq}`;
+    const body = { baseVersion: 0, required: ['job-service'], values: { 'job-service': { revision: 'service-27', json: '{"budget":0.01}' } } };
+    expect((await api('POST', `${g}/lines/main/check-inputs`, AGENT, body)).status).toBe(401);
+    expect((await api('POST', `${g}/lines/main/check-inputs`, ADMIN, body)).data).toMatchObject({ version: 1, required: ['job-service'] });
+    expect((await api('POST', `${g}/lines/main/check-inputs`, ADMIN, body)).status).not.toBe(200);
+    expect((await api('POST', `${g}/lines/main/check-inputs`, ADMIN, { ...body, baseVersion: 1, values: { 'job-service': { revision: 'x', json: 'not-json' } } })).status).toBe(400);
+    const snap = await api('GET', `${g}/snapshot`, ADMIN);
+    expect(snap.data.lines.find((line: any) => line.name === 'main').checkInputs).toMatchObject({ version: 1 });
+  });
+
   it('accepts owner-only checked external reports and rejects incomplete bindings', async () => {
     const g = `/api/graphs/t${++graphSeq}`;
     const premise = (await api('POST', `${g}/assumptions`, ADMIN, { statement: 'budget guard caused interruption' })).data;

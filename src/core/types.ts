@@ -78,6 +78,16 @@ export interface Line {
   group?: string;
   // Accepted promises carried at fork time; later amendments stay local.
   articles?: string[];
+  checkInputs?: CheckInputs;
+  inputCheck?: { version: number; sha: string; status: 'passed' | 'broken' | 'error'; at: number; broken: string[] };
+}
+
+// Public, owner-published check data. The monotonically increasing version
+// prevents an old run from certifying a changed runtime, even at the same SHA.
+export interface CheckInputs {
+  version: number;
+  required: string[];
+  values: Record<string, { revision: string; json: string }>;
 }
 
 // One reality's exposure to a finding.
@@ -143,6 +153,7 @@ export interface Assumption {
   status: AssumptionStatus;
   constitution?: boolean;
   check?: string; // a command, run at the repo root, e.g. "node --test constitution/see-is-pay.test.js"
+  paths?: string[]; // checked modules: notification routing, not blame attribution
   line?: string;
   checkFile?: string;
   proposal?: { by: string; at: number; resolution?: 'adopted' | 'rejected'; reason?: string; atSha?: string; source?: { file: string; sha: string } };
@@ -191,6 +202,7 @@ export interface Finding {
   decision?: string;
   evidence?: FindingEvidence;
   externalEvidence?: ExternalFindingEvidence;
+  runtimeEvidence?: { line: string; sha: string; inputVersion: number };
 }
 
 export interface ExternalFindingEvidence {
@@ -234,6 +246,7 @@ export interface CheckRun {
   runner?: string; // which run owns it (a Workflow instance)
   startedAt: number;
   finishedAt?: number;
+  inputVersion?: number;
 }
 
 // The gate on combinations: the commit merged with the line as it stood, with
@@ -250,6 +263,7 @@ export interface PairCheck {
   startedAt: number;
   finishedAt?: number;
   articles?: string[];
+  inputVersion?: number;
 }
 
 export interface PushRecord {
@@ -272,6 +286,8 @@ export interface PushRecord {
 }
 
 export type EventType =
+  | 'inputs.changed'
+  | 'inputs.checked'
   | 'finding.filed'
   | 'finding.verified'
   | 'finding.refuted'

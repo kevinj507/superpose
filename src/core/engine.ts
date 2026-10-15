@@ -1,9 +1,11 @@
 import { inScope, outOfScope, scopesOverlap, validScope } from './scope';
 import type { Store } from './store';
+import { validateCheckInputs } from './check-inputs';
 import type { PairCheck } from './types';
 import type {
   Assumption,
   CheckRun,
+  CheckInputs,
   Claim,
   ClaimStatus,
   Decision,
@@ -56,7 +58,7 @@ export interface WhyEntry {
 }
 
 export type LandingOutcome =
-  | { status: 'landed'; merge: string; log?: string }
+  | { status: 'landed'; merge: string; log?: string; inputVersion?: number }
   | { status: 'conflict'; files: string[]; log?: string }
   | { status: 'failed' | 'error'; log?: string };
 
@@ -127,7 +129,8 @@ export class Engine {
 
   // ---- building the plan -------------------------------------------------
 
-  addAssumption(statement: string, extra: { constitution?: boolean; check?: string } = {}): Assumption {
+  addAssumption(statement: string, extra: { constitution?: boolean; check?: string; paths?: string[] } = {}): Assumption {
+    if (extra.paths && !validScope(extra.paths)) throw new EngineError('bad_request', 'Invalid checked module paths');
     const a: Assumption = {
       id: this.store.nextId('a'),
       kind: 'assumption',
@@ -135,6 +138,7 @@ export class Engine {
       status: 'holding',
       ...(extra.constitution ? { constitution: true } : {}),
       ...(extra.check?.trim() ? { check: extra.check.trim() } : {}),
+      ...(extra.paths ? { paths: extra.paths } : {}),
     };
     this.store.putNode(a);
     return a;
@@ -603,6 +607,10 @@ export class Engine {
     }
     // Nothing is finished that breaks the constitution together with the line.
     const head = c.headSha ? this.store.getPush(id, c.headSha) : undefined;
+    const inputs = this.line(c.line).checkInputs;
+    if (inputs && (head ? head.pair?.inputVersion !== inputs.version || head.pair.status !== 'passed' : this.line(c.line).inputCheck?.version !== inputs.version || this.line(c.line).inputCheck?.status !== 'passed')) {
+      throw new EngineError('constitution_pending', 'The declared runtime changed or its check is unavailable; wait for a current constitution check before finishing');
+    }
     if (head && this.constitution(c.line).some((a) => a.check && a.proposal) &&
       (head.pair?.status !== 'passed' || !this.pairArticlesMatch(id, head.pair))) {
       throw new EngineError('constitution_pending', 'check this code against the newly adopted constitution before finishing');
@@ -785,7 +793,7 @@ export class Engine {
     if (outcome.status === 'landed') {
       if (same) {
         // A claim made stale while landing is now landed work at risk.
-        const atRisk = c.status === 'stale';
+        const atRisk = c.status === 'stale' || outcome.inputVersion !== line.checkInputs?.version;
         this.markLanded(id, outcome.merge, lineName);
         if (atRisk) this.emit('reality.at_risk', [id], { line: lineName, merge: outcome.merge, landedWhileStale: true });
       } else {
@@ -996,7 +1004,7 @@ export class Engine {
   // work goes stale and keeps its branch; landed work is at risk.
   private applyDoubt(f: Finding, impact: Impact) {
     const now = this.clock.now();
-    const located = f.where ? { where: f.where, constitution: f.finder === 'gate' } : {};
+    const located = f.where ? { where: f.where, constitution: f.finder === 'gate', ...(f.runtimeEvidence ? { runtimeEvidence: f.runtimeEvidence } : {}) } : {};
     for (const id of impact.affected) {
       const c = this.claimNode(id);
       if (c.status === 'stale') continue;
@@ -1365,7 +1373,7 @@ export class Engine {
   private markLanded(id: string, merge: string | undefined, lineName: string) {
     const c = this.claimNode(id);
     this.store.putNode({ ...c, status: 'landed', landing: undefined, landedSha: merge });
-    if (merge) this.store.putLine({ ...this.line(lineName), head: merge });
+    if (merge) this.store.putLine({ ...this.line(lineName), head: merge, inputCheck: undefined });
     this.emit('claim.landed', [id], { line: lineName, merge: merge ?? null });
   }
 
@@ -1415,6 +1423,65 @@ export class Engine {
 
   // ---- the constitution and the gate on pairs -----------------------------------
 
+  setCheckInputs(lineName: string, required: string[], values: CheckInputs['values'], baseVersion: number): CheckInputs {
+    if (!Number.isInteger(baseVersion) || baseVersion < 0) throw new EngineError('bad_request', 'A nonnegative baseVersion is required');
+    try { validateCheckInputs(required, values); } catch (error) { throw new EngineError('bad_request', String(error)); }
+    const line = this.line(lineName);
+    if (baseVersion !== (line.checkInputs?.version ?? 0)) throw new EngineError('settled', 'Check inputs changed; read the current version before updating');
+    const inputs = { version: baseVersion + 1, required, values };
+    this.store.putLine({ ...line, checkInputs: inputs, inputCheck: undefined });
+    this.emit('inputs.changed', this.inputRecipients(lineName), { line: lineName, inputVersion: inputs.version, revisions: Object.fromEntries(Object.entries(values).map(([name, v]) => [name, v.revision])) });
+    return inputs;
+  }
+
+  private inputRecipients(lineName: string, articles = this.constitution(lineName).filter(a => a.check)): string[] {
+    return this.claims().filter(c => c.line === lineName && c.status !== 'superseded' && articles.some(a => !a.paths || scopesOverlap(a.paths, c.scope))).map(c => c.id);
+  }
+
+  recordInputCheck(lineName: string, sha: string, version: number, runs: { article: string; check: CheckRun }[], currentCode = true): boolean {
+    const line = this.line(lineName);
+    const current = currentCode && line.checkInputs?.version === version;
+    if (!current) { this.emit('inputs.checked', [], { line: lineName, sha, inputVersion: version, current: false, status: 'historical' }); return false; }
+    const articles = this.constitution(lineName).filter(a => a.check);
+    if (runs.length !== articles.length || articles.some(a => !runs.some(r => r.article === a.id && r.check.command === a.check)) || runs.some(r => r.check.inputVersion !== version)) {
+      this.emit('inputs.checked', [], { line: lineName, sha, inputVersion: version, current: false, status: 'historical', reason: 'The adopted checks changed during verification.' });
+      return false;
+    }
+    const failed = runs.filter(r => r.check.status === 'failed').map(r => this.assumption(r.article));
+    const error = !articles.length || line.checkInputs!.required.some(name => !line.checkInputs!.values[name]) || runs.some(r => !['passed', 'failed'].includes(r.check.status));
+    const status = error ? 'error' : failed.length ? 'broken' : 'passed';
+    this.store.putLine({ ...line, inputCheck: { version, sha, status, at: this.clock.now(), broken: failed.map(a => a.id) } });
+    this.emit('inputs.checked', this.inputRecipients(lineName), { line: lineName, sha, inputVersion: version, status, broken: failed.map(a => a.id), log: runs.map(r => r.check.log ?? '').join('\n').slice(-4000) });
+    if (!error && failed.length) this.runtimeFinding(lineName, sha, version, failed, runs.map(r => r.check.log ?? '').join('\n'));
+    if (status === 'passed') for (const f of this.findings()) if (f.finder === 'gate' && f.status === 'verified' && f.runtimeEvidence?.line === lineName) {
+      this.store.putNode({ ...f, status: 'resolved' });
+      this.emit('reality.restored', f.where ?? [], { finding: f.id, line: lineName, inputVersion: version });
+    }
+    return true;
+  }
+
+  private runtimeFinding(lineName: string, sha: string, version: number, articles: Assumption[], log: string): Finding {
+    const where = this.inputRecipients(lineName, articles);
+    const existing = this.findings().find(f => f.finder === 'gate' && f.runtimeEvidence?.line === lineName && f.runtimeEvidence.sha === sha && f.runtimeEvidence.inputVersion === version && f.targets.length === articles.length && articles.every(a => f.targets.includes(a.id)));
+    if (existing) {
+      const added = where.filter(id => !existing.where?.includes(id));
+      if (added.length) {
+        const next = { ...existing, where: [...(existing.where ?? []), ...added] };
+        this.store.putNode(next);
+        const impact = this.impactOf(next.id);
+        this.applyDoubt(next, { ...impact, affected: impact.affected.filter(id => added.includes(id)), landedAtRisk: impact.landedAtRisk.filter(id => added.includes(id)) });
+      }
+      return existing;
+    }
+    const statement = `${articles.map(a => `“${a.statement}”`).join(' and ')} fails on ${lineName} at ${sha.slice(0, 7)} with declared check inputs version ${version}: ${excerpt(log)}`;
+    const fingerprint = fingerprintOf(statement, 'contradicts', articles.map(a => a.id), where);
+    const finding: Finding = { id: this.store.nextId('f'), kind: 'finding', statement, effect: 'contradicts', status: 'verified', finder: 'gate', targets: articles.map(a => a.id), where, fingerprint, hedgeUntil: this.clock.now(), at: this.clock.now(), line: lineName, runtimeEvidence: { line: lineName, sha, inputVersion: version } };
+    this.store.putNode(finding);
+    for (const article of articles) this.store.addEdge({ source: finding.id, target: article.id, purpose: 'contradicts' });
+    this.applyDoubt(finding, this.impactOf(finding.id));
+    return finding;
+  }
+
   // What the pair check needs for one claim: its repo, its line's repo, the
   // executable articles, and the landings on the line since the claim's fork
   // point (the work its head meets), oldest first.
@@ -1443,14 +1510,15 @@ export class Engine {
     const row = this.store.getPush(id, sha);
     if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
     const now = this.clock.now();
-    if (row.pair?.status === 'running' && owner && row.pair.runner === owner) return true;
-    if (row.pair?.status === 'running' && now - row.pair.startedAt < staleAfterMs) return false;
+    const inputVersion = this.line(this.claimNode(id).line).checkInputs?.version;
+    if (row.pair?.inputVersion === inputVersion && row.pair?.status === 'running' && owner && row.pair.runner === owner) return true;
+    if (row.pair?.inputVersion === inputVersion && row.pair?.status === 'running' && now - row.pair.startedAt < staleAfterMs) return false;
     if (row.pair && row.pair.status !== 'running') {
       const lineHead = this.line(this.claimNode(id).line).head ?? null;
       const judgedAgainst = row.pair.lineHead ?? null;
-      if ((row.pair.status === 'skipped' || judgedAgainst === lineHead) && this.pairArticlesMatch(id, row.pair)) return false;
+      if (row.pair.inputVersion === inputVersion && (row.pair.status === 'skipped' || judgedAgainst === lineHead) && this.pairArticlesMatch(id, row.pair)) return false;
     }
-    this.store.putPush({ ...row, pair: { status: 'running', startedAt: now, ...(owner ? { runner: owner } : {}) } });
+    this.store.putPush({ ...row, pair: { status: 'running', startedAt: now, ...(inputVersion ? { inputVersion } : {}), ...(owner ? { runner: owner } : {}) } });
     return true;
   }
 
@@ -1465,7 +1533,7 @@ export class Engine {
       if (c.landing?.status === 'landing') continue;
       const row = this.store.getPush(c.id, c.headSha);
       if (!row?.accepted || (row.verdict !== 'checks-passed' && row.checks?.status !== 'skipped')) continue;
-      if (row.pair && (row.pair.status === 'running' || ((row.pair.status === 'skipped' || (row.pair.lineHead ?? null) === head) && this.pairArticlesMatch(c.id, row.pair)))) continue;
+      if (row.pair && row.pair.inputVersion === this.line(lineName).checkInputs?.version && (row.pair.status === 'running' || ((row.pair.status === 'skipped' || (row.pair.lineHead ?? null) === head) && this.pairArticlesMatch(c.id, row.pair)))) continue;
       out.push({ claim: c.id, sha: c.headSha, repo: c.repo.name });
     }
     return out;
@@ -1480,10 +1548,14 @@ export class Engine {
     const row = this.store.getPush(id, sha);
     if (!row) throw new EngineError('not_found', `no push ${sha} on ${id}`);
     const next: PushRecord = { ...row, pair };
+    if (pair.inputVersion !== this.line(this.claimNode(id).line).checkInputs?.version) {
+      this.emit('claim.pair_checked', [], { sha, status: pair.status, inputVersion: pair.inputVersion ?? null, current: false });
+      return row;
+    }
     this.store.putPush(next);
     if (pair.status === 'running') return next;
     const c = this.claimNode(id);
-    const current = c.headSha === sha && this.pairArticlesMatch(id, pair) &&
+    const current = c.headSha === sha && pair.inputVersion === this.line(c.line).checkInputs?.version && this.pairArticlesMatch(id, pair) &&
       (pair.lineHead === undefined || this.line(c.line).head === undefined || pair.lineHead === this.line(c.line).head);
     this.emit('claim.pair_checked', [id], {
       sha,
@@ -1531,6 +1603,7 @@ export class Engine {
   private resolveGateFindings(id: string) {
     for (const f of this.findings()) {
       if (f.finder !== 'gate' || f.status !== 'verified' || !f.where?.includes(id)) continue;
+      if (f.runtimeEvidence) continue; // only a current line audit restores a runtime failure
       this.store.putNode({ ...f, status: 'resolved' });
       const landed = f.where.filter((w) => this.store.getNode(w)?.kind === 'claim' && (this.store.getNode(w) as Claim).status === 'landed');
       this.emit('reality.restored', landed, { finding: f.id, by: id });

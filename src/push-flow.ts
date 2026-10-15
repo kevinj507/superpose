@@ -34,6 +34,31 @@ export type HandledPush =
 export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
   async run(event: WorkflowEvent<ArtifactsEvent>, step: WorkflowStep) {
     const host = new ArtifactsHost(this.env.ARTIFACTS!);
+    if (event.payload.type === 'superpose.inputs.check') {
+      const name = parseRepoName(event.payload.source.repoName);
+      if (!name) return { ignored: 'unknown input-check repository' };
+      const line = event.payload.payload.ref;
+      const stub = this.env.GRAPH.get(this.env.GRAPH.idFromName(name.graph));
+      const context = await step.do('capture code and declared runtime inputs', async () => {
+        const r = await stub.inputCheckContext(line);
+        return r ? { repo: r.repo, sha: r.sha, inputs: r.inputs, articles: r.articles } : null;
+      });
+      if (!context) return { ignored: 'no declared runtime check context' };
+      const configured = await step.do('read the owner check configuration', () => readCheckConfig(host, context.repo.name, context.sha));
+      const runs: { article: string; check: CheckRun }[] = [];
+      for (const article of context.articles) {
+        const check = await step.do('check runtime article '+article.id, { timeout: '12 minutes' }, async () => {
+          const attempt = crypto.randomUUID();
+          return runCheck(host, (job: ExecJob) => this.env.CHECKER.get(this.env.CHECKER.idFromName(`input:${name.graph}:${context.inputs.version}:${article.id}:${attempt}`)).run(job), context.repo, context.sha, { ...configured, check: article.check, timeoutSeconds: configured?.timeoutSeconds ?? 60, inputs: context.inputs });
+        });
+        runs.push({ article: article.id, check });
+      }
+      const applied = await step.do('apply only to the captured runtime and code', async () => {
+        const r = await stub.recordInputCheck(line, context.sha, context.inputs.version, runs);
+        return r.ok && r.value;
+      });
+      return { inputVersion: context.inputs.version, applied, runs };
+    }
     if (event.payload.type === FINDING_CHECK) {
       const name = parseRepoName(event.payload.source.repoName);
       const finding = event.payload.payload.finding;
@@ -99,7 +124,12 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       return r.ok ? r.value.verdict : null;
     };
 
-    const config = await step.do('read the checks from the commit', () => readCheckConfig(host, repo.name, record.sha));
+    const config = await step.do('read the checks from the commit', async () => {
+      const configured = await readCheckConfig(host, repo.name, record.sha);
+      const context = await stub.pairContext(claim);
+      const inputs = context.ok && !('skip' in context.value) ? context.value.inputs : undefined;
+      return configured ? { ...configured, ...(inputs ? { inputs } : {}) } : configured;
+    });
     if (!config) {
       const now = Date.now();
       await step.do('record that no checks are declared', () =>
@@ -160,8 +190,9 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
     });
     if (!ctx) return 'no context';
     if ('skip' in ctx) return ctx.skip;
+    config = { ...config, ...(ctx.inputs ? { inputs: ctx.inputs } : {}) };
     const mine = await step.do('start the pair check, unless already running or already judged', async () => {
-      const r = await stub.beginPair(claim, sha, runId);
+      const r = await stub.beginPair(claim, sha, runId, ctx.inputs?.version);
       return r.ok && r.value;
     });
     if (!mine) return 'already running or judged for this commit and this line';
@@ -181,7 +212,7 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       );
     } catch (err) {
       const now = Date.now();
-      pair = { status: 'error', log: String(err).slice(0, 2000), startedAt: now, finishedAt: now };
+      pair = { status: 'error', log: String(err).slice(0, 2000), startedAt: now, finishedAt: now, ...(ctx.inputs ? { inputVersion: ctx.inputs.version } : {}) };
     }
     await step.do('record the pair check', async () => {
       const r = await stub.recordPair(claim, sha, pair);

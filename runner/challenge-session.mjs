@@ -145,11 +145,11 @@ export async function startChallengeSession({ cwd, gateway, image, stateDir, rol
       return { status: 'provider-error', error };
     }
   };
-  const notify = async (text, { label } = {}) => {
-    if (!activeTurn) return turn(text, { label });
+  const notify = async (text, { label, activeOnly = false } = {}) => {
+    if (!activeTurn) return activeOnly ? false : turn(text, { label });
     const current = activeTurn;
     await current.started;
-    if (activeTurn !== current) return turn(text, { label });
+    if (activeTurn !== current) return activeOnly ? false : turn(text, { label });
     emit({ kind: 'outgoing-prompt', role: role.id, session: sessionId, at: Date.now(), label: label ?? null, text, delivery: 'steer' });
     return isolated.rpc.rpc('turn/steer', { threadId: isolated.thread, expectedTurnId: current.turnId, input: [{ type: 'text', text }] });
   };
