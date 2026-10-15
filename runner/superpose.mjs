@@ -462,6 +462,9 @@ async function done({ dir, claim, api }, values) {
       if (row.verdict === 'checks-passed' || row.checks?.status === 'skipped') {
         const paired = await pairFor(api, claim, head, Number(values.wait ?? 150));
         const pair = paired?.pair;
+        if (pair?.status === 'blocked') {
+          throw new Refused(`Not finished yet: the shared line already fails ${(pair.baselineBroken ?? []).join(', ')}. Your commit is retained and your claim remains active. The platform rechecks it after the line is repaired. Run done again to wait; this result does not require changing unrelated code.`);
+        }
         if (pair?.status === 'broken') {
           const index = await snapshotIndex(api);
           throw new Refused(
@@ -499,10 +502,15 @@ async function done({ dir, claim, api }, values) {
 async function pairFor(api, claim, sha, waitSeconds) {
   const started = Date.now();
   let row = null;
+  let waitingOnLine = false;
   while (Date.now() - started < waitSeconds * 1000) {
     const index = await snapshotIndex(api);
     row = index?.pushes.find((p) => p.claim === claim.claim && p.sha === sha) ?? row;
-    if (row?.pair && row.pair.status !== 'running') return row;
+    if (row?.pair?.status === 'blocked' && !waitingOnLine) {
+      say('Waiting for the shared line to be repaired. These articles also fail without your change; your commit is retained and will be rechecked automatically.');
+      waitingOnLine = true;
+    }
+    if (row?.pair && row.pair.status !== 'running' && row.pair.status !== 'blocked') return row;
     await sleep(5000);
   }
   return row;

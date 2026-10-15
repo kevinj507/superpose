@@ -196,7 +196,7 @@ export class PushFlow extends WorkflowEntrypoint<Env, ArtifactsEvent> {
       return r.ok && r.value;
     });
     if (!mine) return 'already running or judged for this commit and this line';
-    const runs = 1 + Math.min(8, ctx.candidates.length);
+    const runs = (2 + Math.min(8, ctx.candidates.length)) * (ctx.articles.length + (config.setup ? 1 : 0));
     let pair: PairCheck;
     try {
       pair = await step.do(

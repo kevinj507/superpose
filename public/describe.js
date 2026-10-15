@@ -262,6 +262,7 @@ export function describeEvent(ev, ctx = {}) {
     case 'claim.pair_checked': {
       const broken = Array.isArray(d.broken) ? d.broken : [];
       if (d.status === 'passed') return { tone: 'ok', icon: 'check', html: `${chips(claimsOf, nodes)} merged with the line keeps the constitution` };
+      if (d.status === 'blocked') return { tone: 'muted', icon: 'dot', html: `${chips(claimsOf, nodes)} waits for the shared line to be repaired<span class="sub">The same articles fail without this change. Its commit is retained and will be rechecked after a landing.</span>` };
       if (d.status === 'broken') {
         return {
           tone: 'bad',

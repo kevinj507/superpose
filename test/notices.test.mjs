@@ -96,7 +96,7 @@ describe('what the gate says about a pair', () => {
     const broken = describeNotice(ev('claim.pair_checked', { sha: 'a'.repeat(40), lineHead: 'b'.repeat(40), status: 'broken', broken: ['a9'], partner: 'c3', current: true }), withArticle, 'c2');
     expect(broken.title).toContain('CONSTITUTION BROKEN');
     expect(broken.text).toContain('What you see is what you pay.');
-    expect(broken.text).toContain('together with c3');
+    expect(broken.text).toContain('with c3');
     expect(mustRead({ ...broken, type: 'claim.pair_checked' })).toBe(true);
     const kept = describeNotice(ev('claim.pair_checked', { sha: 'a'.repeat(40), lineHead: 'b'.repeat(40), status: 'passed' }), withArticle, 'c2');
     expect(kept.title).toContain('CONSTITUTION KEPT');

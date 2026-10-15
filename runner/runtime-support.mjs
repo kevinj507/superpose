@@ -1,16 +1,16 @@
 import {readFileSync,writeFileSync,mkdirSync,appendFileSync,chmodSync,rmSync} from 'node:fs';
 import {join,resolve} from 'node:path';import {spawn,spawnSync} from 'node:child_process';
-import {Api,git,gitAsync,gitAuthEnv,writeClaim,atomicWrite,indexSnapshot,recordNotices,noticesAbout,readSeenSeq,advanceSeenSeq,STANDING_NOTICES} from './lib.mjs';
+import {Api,git,gitAsync,gitAuthEnv,writeClaim,atomicWrite,indexSnapshot,recordNotices,noticesAbout,adviceFor,readSeenSeq,advanceSeenSeq,STANDING_NOTICES} from './lib.mjs';
 import {groupGateway} from './experiment-gateway.mjs';
 export const REPO=resolve(new URL('..',import.meta.url).pathname),CLI=join(REPO,'runner/superpose.mjs');
 export const IMAGE='sha256:0e5f906573693feaa1e21057ebdcfdb5bd5021f050b2dc7c9deceb629c7da2a8';
 export const owner=['-c','user.name=Kevin Joo','-c','user.email=kevinj507@gmail.com'];
-export function credentials(){const raw=readFileSync(join(REPO,'.env'),'utf8'),field=k=>raw.match(new RegExp('^'+k+'=(.*)$','m'))?.[1]?.trim().replace(/^['"]|['"]$/g,'');const admin=field('SUPERPOSE_ADMIN_TOKEN'),agent=field('SUPERPOSE_AGENT_KEY'),url=field('SUPERPOSE_URL')??'https://superpose.kevinj507.workers.dev';if(!admin||!agent)throw Error('Existing Superpose credentials required');return{admin,agent,url};}
+export function credentials(){if(process.env.SUPERPOSE_CONNECTION){const c=JSON.parse(readFileSync(process.env.SUPERPOSE_CONNECTION,'utf8'));if(!c.url||!c.admin||!c.agent)throw Error('Incomplete Superpose connection');return{admin:c.admin,agent:c.agent,url:c.url};}const raw=readFileSync(join(REPO,'.env'),'utf8'),field=k=>raw.match(new RegExp('^'+k+'=(.*)$','m'))?.[1]?.trim().replace(/^['"]|['"]$/g,'');const admin=field('SUPERPOSE_ADMIN_TOKEN'),agent=field('SUPERPOSE_AGENT_KEY'),url=field('SUPERPOSE_URL')??'https://superpose.kevinj507.workers.dev';if(!admin||!agent)throw Error('Existing Superpose credentials required');return{admin,agent,url};}
 export function must(r,label){if(!r.ok)throw Error(label+' failed: '+r.status+' '+(r.data?.message??r.data?.error??''));return r.data;}
 export function initSeed(dir){git(dir,['init','-q','-b','main']);git(dir,['add','-A']);git(dir,[...owner,'commit','-qm','Start the job service']);return git(dir,['rev-parse','HEAD']).stdout.trim();}
 export function command(cmd,args,{cwd,timeoutMs=60000}={}){return new Promise((done,reject)=>{const p=spawn(cmd,args,{cwd,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';p.stdout.on('data',b=>stdout+=b);p.stderr.on('data',b=>stderr+=b);const timer=setTimeout(()=>p.kill('SIGKILL'),timeoutMs);p.on('error',reject);p.on('close',code=>{clearTimeout(timer);done({code,stdout,stderr});});});}
-export async function provisionNative({row,api,admin,agent,graphId,url,baseSha,task,transportFile,initial=false}){
- const c=must(await api.addClaim(admin,{statement:task,scope:row.scope,line:'main',restsOn:[],baseSha}),'feature claim');
+export async function provisionNative({row,api,admin,agent,graphId,url,baseSha,task,transportFile,initial=false,restsOn=[]}){
+ const c=must(await api.addClaim(admin,{statement:task,scope:row.scope,line:'main',restsOn,baseSha}),'feature claim');
  const grant=must(await api.claim(agent,c.id,'luna-'+row.id),'feature holder');row.claimId=c.id;row.remote=grant.repo.remote;row.gitToken=grant.git.token;row.lease=grant.token;
  row.gateway??=await groupGateway({graphId,url,remotes:[],onRequest:e=>appendFileSync(transportFile,JSON.stringify(e)+'\n')});
  const remote=row.gateway.register(row.remote,row.gitToken);
@@ -27,7 +27,8 @@ export async function provisionNative({row,api,admin,agent,graphId,url,baseSha,t
 }
 export async function collectNotices(api,row){
  const snapshot=must(await api.request('GET','/snapshot',{token:row.lease}),'scoped native observation');
- const notices=recordNotices(row.cwd,noticesAbout(indexSnapshot(snapshot),row.claimId,{afterSeq:readSeenSeq(row.cwd),types:STANDING_NOTICES}));advanceSeenSeq(row.cwd,snapshot.events.at(-1)?.seq??0);return notices;
+ const index=indexSnapshot(snapshot);
+ const notices=recordNotices(row.cwd,[...noticesAbout(index,row.claimId,{afterSeq:readSeenSeq(row.cwd),types:STANDING_NOTICES}),...adviceFor(index,row.claimId)]);advanceSeenSeq(row.cwd,snapshot.events.at(-1)?.seq??0);return notices;
 }
 export const apiFor=(url,gid,admin)=>new Api(url,gid,admin);
 // Evaluation runs submitted code with just its own checkout, never the host

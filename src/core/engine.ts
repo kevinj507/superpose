@@ -607,6 +607,9 @@ export class Engine {
     }
     // Nothing is finished that breaks the constitution together with the line.
     const head = c.headSha ? this.store.getPush(id, c.headSha) : undefined;
+    if (head?.pair?.status === 'blocked') {
+      throw new EngineError('constitution_pending', 'The shared line already fails these articles; your commit is retained. Wait for its repair and the automatic combination recheck before finishing');
+    }
     const inputs = this.line(c.line).checkInputs;
     if (inputs && (head ? head.pair?.inputVersion !== inputs.version || head.pair.status !== 'passed' : this.line(c.line).inputCheck?.version !== inputs.version || this.line(c.line).inputCheck?.status !== 'passed')) {
       throw new EngineError('constitution_pending', 'The declared runtime changed or its check is unavailable; wait for a current constitution check before finishing');
@@ -1561,6 +1564,7 @@ export class Engine {
       sha,
       status: pair.status,
       broken: pair.broken ?? [],
+      baselineBroken: pair.baselineBroken ?? [],
       partner: pair.partner ?? null,
       lineHead: pair.lineHead ?? null,
       files: pair.files ?? [],

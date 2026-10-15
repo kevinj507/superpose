@@ -9,3 +9,6 @@ dist/
 /work/
 /runs/
 .graphtask/
+.superpose/
+.env.*
+!.env.example

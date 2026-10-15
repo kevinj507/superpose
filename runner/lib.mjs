@@ -627,13 +627,14 @@ export function describeNotice(n, index, claimId) {
     case 'claim.pair_checked': {
       const at = `${shortSha(d.sha ?? '')} merged with the line at ${shortSha(d.lineHead ?? '')}`;
       if (d.status === 'passed') return { ...base, title: `CONSTITUTION KEPT: ${at} keeps every article`, text: 'The constitution ran on your commit merged with the line as it stands, and every article held.' };
+      if (d.status === 'blocked') return { ...base, title: `WAITING FOR THE LINE: ${at}`, text: `These articles also fail on the shared line without your change: ${assumptionList(d.baselineBroken)}. This check does not attribute that failure to your claim. Your commit is retained, your claim remains active, and the platform rechecks it after a landing. The done command can wait for that repair; no unrelated code change is required by this result.` };
       if (d.status === 'broken') {
         return {
           ...base,
           title: `CONSTITUTION BROKEN: ${at} breaks ${(d.broken ?? []).join(', ')}`,
           text:
             `Articles broken on the pair: ${assumptionList(d.broken)}.` +
-            (typeof d.partner === 'string' ? ` Each alone holds; your commit breaks them together with ${d.partner} ${quoteStatement(node(d.partner))}, already landed.` : '') +
+            (typeof d.partner === 'string' ? ` The shared line passes these articles; the combination breaks them with ${d.partner} ${quoteStatement(node(d.partner))}, already landed.` : '') +
             (d.current === false ? '\nThis was an earlier commit of yours; the gate judges your latest one on its own.' : '\nA STALE notice says what to do.'),
         };
       }

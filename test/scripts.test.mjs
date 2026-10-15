@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -156,6 +156,40 @@ function lineAndClaim(dir) {
 }
 
 describe('the pair scripts', () => {
+  it('retains unrelated work on an already broken line, then accepts the unchanged commit after repair', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sp-baseline-'));
+    try {
+      const w = lineAndClaim(dir);
+      expect(pairMerge(dir, { LINE_REMOTE: w.line, CLAIM_REMOTE: w.claim, SHA: w.sha }).code).toBe(0);
+      // pricing.txt is on the shared line, pages.txt is the independent change.
+      const check = 'a1\ttest ! -f pricing.txt';
+      const blocked = pairRun(dir, { CHECKS: check });
+      expect(blocked.code).toBe(1);
+      expect(pairResult({ exitCode: blocked.code, stdout: blocked.out, stderr: blocked.err, step: 1 }, 0, 1)).toMatchObject({ status: 'blocked', baselineBroken: ['a1'] });
+      expect(blocked.out).not.toMatch(/^PARTNER |^BROKEN /m);
+      // Repair the line; neither amend nor rebase the unrelated claim.
+      const line = join(dir, 'line-work');
+      execFileSync('git', ['-C', line, 'rm', '-q', 'pricing.txt']);
+      execFileSync('git', ['-C', line, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'Repair line']);
+      execFileSync('git', ['-C', line, 'push', '-q', w.line, 'HEAD:main']);
+      rmSync(join(dir, 'w-line'), { recursive: true, force: true });
+      expect(pairMerge(dir, { LINE_REMOTE: w.line, CLAIM_REMOTE: w.claim, SHA: w.sha }).code).toBe(0);
+      expect(pairRun(dir, { CHECKS: check })).toMatchObject({ code: 0, out: expect.stringContaining('PAIR OK') });
+      expect(readFileSync(join(dir, 'w', 'pages.txt'), 'utf8')).toBe('pages cached');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('does not turn a timed-out article into a verified contradiction', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sp-timeout-'));
+    try {
+      const w = lineAndClaim(dir);
+      expect(pairMerge(dir, { LINE_REMOTE: w.line, CLAIM_REMOTE: w.claim, SHA: w.sha }).code).toBe(0);
+      const result = pairRun(dir, { CHECKS: 'a1\tsleep 2', TIMEOUT: '0.1' });
+      expect(result.code).toBe(2);
+      expect(pairResult({ exitCode: result.code, stdout: result.out, step: 1 }, 0, 1).status).toBe('error');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('parse', () => {
     for (const s of [PAIR_MERGE_SCRIPT, PAIR_RUN_SCRIPT]) expect(spawnSync('sh', ['-n'], { input: s }).status).toBe(0);
   });
@@ -218,7 +252,7 @@ describe('the pair scripts', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sp-pair-'));
     try {
       const w = join(dir, 'w');
-      execFileSync('mkdir', ['-p', w, join(dir, 'w-c3'), join(dir, 'w-c5')]);
+      execFileSync('mkdir', ['-p', w, join(dir, 'w-line'), join(dir, 'w-c3'), join(dir, 'w-c5')]);
       writeFileSync(join(w, '.pair-ready'), '');
       // An article that breaks when both pages.txt and pricing.txt exist.
       const both = `test -f pages.txt && test -f pricing.txt && exit 1; exit 0`;

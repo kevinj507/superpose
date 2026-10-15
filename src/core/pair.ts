@@ -44,6 +44,7 @@ fi
 git -c http.extraHeader="Authorization: Bearer $LINE_TOKEN" fetch -q "$LINE_REMOTE" main || exit ${EXIT_FETCH_FAILED}
 git checkout -q -B main FETCH_HEAD || exit ${EXIT_FETCH_FAILED}
 echo "BASE $(git rev-parse HEAD)"
+git worktree add -q --detach /work-line HEAD || exit ${EXIT_FETCH_FAILED}
 git -c http.extraHeader="Authorization: Bearer $CLAIM_TOKEN" fetch -q "$CLAIM_REMOTE" "$SHA" || exit ${EXIT_FETCH_FAILED}
 git branch -q -f head FETCH_HEAD
 if ! git merge -q --no-ff -m "pair" head > /dev/null 2>&1; then
@@ -81,15 +82,22 @@ check_in() {
     run "$SETUP" "/tmp/setup-$label.log" || { echo "SETUP FAILED ($label)"; tail -c 2000 "/tmp/setup-$label.log"; return 2; }
   fi
   : > "/tmp/broken-$label"
+  : > "/tmp/unavailable-$label"
   printf '%s\\n' "$CHECKS" | while IFS="$TAB" read -r id cmd; do
     [ -n "$id" ] || continue
-    if run "$cmd" "/tmp/check-$label-$id.log"; then
+    run "$cmd" "/tmp/check-$label-$id.log"
+    code=$?
+    if [ $code -eq 0 ]; then
       echo "ARTICLE $label $id ok"
+    elif [ $code -eq 124 ] || [ $code -eq 137 ]; then
+      echo "ARTICLE $label $id UNAVAILABLE"
+      echo "$id" >> "/tmp/unavailable-$label"
     else
       echo "ARTICLE $label $id BROKEN"
       echo "$id" >> "/tmp/broken-$label"
     fi
   done
+  [ -s "/tmp/unavailable-$label" ] && return 2
   [ -s "/tmp/broken-$label" ] && return 1
   return 0
 }
@@ -100,18 +108,46 @@ if [ $status -eq 0 ]; then
   echo "PAIR OK"
   exit 0
 fi
-echo "BROKEN $(tr '\\n' ' ' < /tmp/broken-pair)"
 for id in $(cat /tmp/broken-pair); do
   echo "--- $id"
   tail -c 3000 "/tmp/check-pair-$id.log"
 done
+# A failure already present on the line is not evidence against this claim.
+# Both folders use the same declared runtime inputs and exact fetched line.
+check_in /work-line baseline
+baseline_status=$?
+[ $baseline_status -eq 2 ] && exit 2
+: > /tmp/introduced
+: > /tmp/preexisting
+for id in $(cat /tmp/broken-pair); do
+  if grep -qxF "$id" /tmp/broken-baseline; then
+    echo "$id" >> /tmp/preexisting
+  else
+    echo "$id" >> /tmp/introduced
+  fi
+done
+echo "BASELINE_BROKEN $(tr '\\n' ' ' < /tmp/preexisting)"
+if [ ! -s /tmp/introduced ]; then
+  echo "BLOCKED"
+  exit 1
+fi
+echo "BROKEN $(tr '\\n' ' ' < /tmp/introduced)"
+# Search only for newly failing articles; an existing failure cannot name a partner.
+CHECKS=$(printf '%s\\n' "$CHECKS" | while IFS="$TAB" read -r id cmd; do
+  if grep -qxF "$id" /tmp/introduced; then printf '%s\\t%s\\n' "$id" "$cmd"; fi
+done)
 # The partner: the oldest landing the head already breaks the articles with.
 for id in $CANDIDATES; do
   [ -d "/work-$id" ] || continue
-  if check_in "/work-$id" "$id" > /dev/null 2>&1; then
+  check_in "/work-$id" "$id" > /dev/null 2>&1
+  candidate_status=$?
+  if [ $candidate_status -eq 0 ]; then
     echo "CAND $id passes"
-  else
+  elif [ $candidate_status -eq 1 ]; then
     echo "PARTNER $id"
+    break
+  else
+    echo "CAND $id unavailable"
     break
   fi
 done
@@ -126,7 +162,7 @@ export async function checkPair(host: RepoHost, exec: Exec, job: PairJob, now: (
   const perRun = job.config.timeoutSeconds;
   // One check per article, in the pair and in each candidate: the job's own
   // timebox covers them all.
-  const timeoutSeconds = Math.min(1200, Math.max(60, perRun * (1 + candidates.length)));
+  const timeoutSeconds = Math.min(1200, Math.max(60, perRun * (2 + candidates.length) * (job.articles.length + (job.config.setup ? 1 : 0))));
   const ttl = Math.max(120, timeoutSeconds * 2 + 120);
   const lineToken = await host.mintToken(job.line.name, 'read', ttl);
   try {
@@ -190,9 +226,11 @@ export function pairResult(outcome: ExecOutcome, startedAt: number, finishedAt: 
   }
   if (outcome.exitCode === 0) return { ...base, status: 'passed' };
   if (outcome.exitCode === 1) {
+    const baselineBroken = (/^BASELINE_BROKEN (.*)$/m.exec(stdout)?.[1] ?? '').split(/\s+/).filter(Boolean);
+    if (/^BLOCKED$/m.test(stdout) && baselineBroken.length) return { ...base, status: 'blocked', baselineBroken };
     const broken = (/^BROKEN (.*)$/m.exec(stdout)?.[1] ?? '').split(/\s+/).filter(Boolean);
     const partner = /^PARTNER (\S+)/m.exec(stdout)?.[1] ?? null;
-    return broken.length ? { ...base, status: 'broken', broken, partner } : { ...base, status: 'error' };
+    return broken.length ? { ...base, status: 'broken', broken, partner, ...(baselineBroken.length ? { baselineBroken } : {}) } : { ...base, status: 'error' };
   }
   // The setup failed, or a check ran out of time: not a verdict on the pair.
   return { ...base, status: 'error' };

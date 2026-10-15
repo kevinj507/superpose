@@ -252,10 +252,11 @@ export interface CheckRun {
 // The gate on combinations: the commit merged with the line as it stood, with
 // the constitution's checks run on the pair. A verdict on two exact commits.
 export interface PairCheck {
-  status: 'running' | 'passed' | 'broken' | 'conflict' | 'error' | 'skipped';
+  status: 'running' | 'passed' | 'broken' | 'blocked' | 'conflict' | 'error' | 'skipped';
   lineHead?: string | null; // the line commit the pair was made on
   merge?: string; // the scratch merge the checks ran on
   broken?: string[]; // article ids that failed on the pair
+  baselineBroken?: string[]; // pair failures also observed on the exact line alone; no claim attribution
   partner?: string | null; // the landed claim the commit breaks the article with, when one was found
   files?: string[]; // for a conflict: the files
   log?: string;

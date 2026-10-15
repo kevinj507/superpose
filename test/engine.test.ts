@@ -402,6 +402,24 @@ describe('the constitution and the gate on pairs', () => {
     expect(() => w.engine.finish(w.c2.id, t2)).not.toThrow();
   });
 
+  it('an existing line failure waits without staling unrelated work, then rechecks and permits completion', () => {
+    const w = shop();
+    const token = w.engine.claim(w.c2.id, 'independent').token;
+    w.engine.attachRepo(w.c2.id, token, { name: 'g.claim.c2', remote: 'y' }, 'seed');
+    w.push(w.c2.id, 'unchanged', ['src/pages.js']);
+    w.engine.recordPair(w.c2.id, 'unchanged', { status: 'blocked', baselineBroken: [w.article.id], lineHead: null, startedAt: 0, finishedAt: 1 });
+    expect(w.engine.node(w.c2.id)).toMatchObject({ status: 'claimed', headSha: 'unchanged' });
+    expect(w.engine.findings()).toHaveLength(0);
+    expect(() => w.engine.finish(w.c2.id, token)).toThrow(/shared line/);
+    const repairToken = w.engine.claim(w.c3.id, 'repair').token;
+    w.engine.attachRepo(w.c3.id, repairToken, { name: 'g.claim.c3', remote: 'z' }, 'seed');
+    w.push(w.c3.id, 'repair', ['src/pricing.js']);
+    w.land(w.c3.id, repairToken, 'repaired-line');
+    expect(w.engine.pairRechecks('main')).toContainEqual({ claim: w.c2.id, sha: 'unchanged', repo: 'g.claim.c2' });
+    w.engine.recordPair(w.c2.id, 'unchanged', { status: 'passed', lineHead: 'repaired-line', startedAt: 2, finishedAt: 3 });
+    expect(() => w.engine.finish(w.c2.id, token)).not.toThrow();
+  });
+
   it('a landing makes every in-flight head on the line due for a pair check again', () => {
     const w = shop();
     const t2 = w.engine.claim(w.c2.id, 'a2').token;
